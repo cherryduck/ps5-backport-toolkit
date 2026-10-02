@@ -23,14 +23,16 @@ class StubAbsent(Rule):
         if not ctx.cov:
             return []
         absent = {m.module: set(m.absent) for m in ctx.cov.modules if m.status == "absent"}
+        kit = "kit-stubs" in set(ctx.options.get("enabled", ()))
+        kit_owned = {m.module: set(m.stub_src) for m in ctx.cov.modules} if kit else {}
         out = []
         for bi in ctx.gs.binaries:
             if bi.role == "fakelib" or bi.error:
                 continue
             for mod, nids in bi.imports_by_module.items():
                 for n in sorted(set(nids) & absent.get(mod, set())):
-                    if n in PRO_BODIES:
-                        continue
+                    if n in PRO_BODIES or n in kit_owned.get(mod, set()):
+                        continue                # owned by pro-disable / kit-stubs
                     out.append(Finding(self.name, bi.path, f"{mod}:{n} absent on {ctx.target}.xx",
                                        recommended=True, data={"nid": n, "module": mod}))
         return out

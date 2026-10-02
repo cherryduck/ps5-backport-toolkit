@@ -47,6 +47,7 @@ class BinaryInfo:
     imports_by_module: dict[str, list[str]] = field(default_factory=dict)
     exports: list[str] = field(default_factory=list)                # NIDs (own module)
     stubbed_by_module: dict[str, list[str]] = field(default_factory=dict)
+    plt_patched: dict[str, dict[str, str]] = field(default_factory=dict)  # module -> {nid: stub body hex}
     sha256: str = ""
     flags: list[str] = field(default_factory=list)
     error: str = ""
@@ -80,8 +81,8 @@ class GameScan:
         v = [b.sdk_ps5 for b in self.binaries if b.sdk_ps5 is not None and b.role != "fakelib"]
         return max(v) if v else None
 
-    def needs_downgrade(self, target: int) -> list[BinaryInfo]:
-        ps5, _ = sdk.SDK_PAIRS[target]
+    def needs_downgrade(self, target: int, minor: int = 0) -> list[BinaryInfo]:
+        ps5, _ = sdk.target_pair(target, minor)
         return [b for b in self.binaries if b.sdk_ps5 is not None and b.sdk_ps5 > ps5]
 
     def to_dict(self) -> dict:
@@ -137,9 +138,38 @@ def scan_binary(path: Path, root: Path, role: str) -> BinaryInfo:
         info.imports_by_module = {k: sorted(v) for k, v in d.imports_by_module().items()}
         info.exports = sorted(d.exported_nids())
         info.stubbed_by_module = {k: sorted(v) for k, v in d.stubbed_by_module().items()}
+        info.plt_patched = plt_patched(b, d, 0x400000 if role == "eboot" else 0)
     info.sha256 = hashlib.sha256(b.data).hexdigest()
     info.flags = _flags(b, d)
     return info
+
+
+LOADING_LAYERS = ("libSceAmpr", "libScePlayGo")
+
+
+def is_loading_layer(module: str) -> bool:
+    """Ampr / PlayGo emulation shipped with dumps and kits: needed for newer games to load
+    at all, independent of firmware — never a FW fakelib, never FW evidence."""
+    return module.startswith(LOADING_LAYERS)
+
+
+def plt_patched(b: Binary, d, base: int) -> dict[str, dict[str, str]]:
+    """Imports whose PLT entry a backporter overwrote with a stub: module -> {nid: body hex}."""
+    from .asm import canonical_plt, plt_entries, stub_body
+    mod_of = {s.name: d.module_name(s) for s in d.imports()}
+    out: dict[str, dict[str, str]] = {}
+    try:
+        entries = plt_entries(b, d, base)
+    except Exception:                                    # noqa: BLE001 — odd PLT: no stub info
+        return out
+    for name, va, e in entries:
+        if canonical_plt(e):
+            continue
+        body = stub_body(e, va)
+        if body is None or name not in mod_of:
+            continue
+        out.setdefault(mod_of[name], {})[name.split("#")[0]] = body.hex()
+    return out
 
 
 def iter_binaries(root: Path):

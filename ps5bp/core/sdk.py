@@ -31,6 +31,26 @@ SDK_PAIRS: dict[int, tuple[int, int]] = {
 SUPPORTED_TARGETS = (4, 5, 6, 7)
 
 
+def target_pair(major: int, minor: int = 0) -> tuple[int, int]:
+    """(PS5 SDK, PS4 SDK) for target major.minor; minor is the BCD byte (4.03 -> 0x03).
+    Backporters targeting e.g. 4.03 keep the major's build suffix: 0x04000031 -> 0x04030031."""
+    ps5, ps4 = SDK_PAIRS[major]
+    return (ps5 & 0xFF00FFFF) | ((minor & 0xFF) << 16), ps4
+
+
+def parse_target(s: str) -> tuple[int, int]:
+    """'4' -> (4, 0); '4.03' -> (4, 0x03); '4.50' -> (4, 0x50)."""
+    m = __import__("re").fullmatch(r"(\d+)(?:\.(\d{1,2}))?", str(s).strip())
+    if not m or int(m[1]) not in SUPPORTED_TARGETS:
+        raise ValueError(f"target must be one of {', '.join(map(str, SUPPORTED_TARGETS))}, optionally "
+                         f"with a minor version (e.g. 4.03)")
+    return int(m[1]), int((m[2] or "0").rjust(2, "0"), 16)
+
+
+def target_str(major: int, minor: int = 0) -> str:
+    return f"{major}.{minor:02x}" if minor else f"{major}.xx"
+
+
 def fw_str(ps5_sdk: int) -> str:
     """0x04000031 -> '4.00' (BCD major.minor)."""
     return f"{(ps5_sdk >> 24) & 0xFF:x}.{(ps5_sdk >> 16) & 0xFF:02x}"

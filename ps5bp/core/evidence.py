@@ -8,6 +8,15 @@ extras like k9.psp) labelled with the firmware its author targeted. Ingesting a 
   * records "present" evidence: every import (module, NID) made by any binary in the
     kit to a system module the kit does NOT replace was resolved by the firmware
   * records "absent" evidence: imports a backporter bound to a local stub
+  * records PLT stubs: imports whose PLT entry a backporter overwrote in place
+    (`xor eax,eax; ret`, `ud2`, out-param writes ...), with the exact stub body, so the
+    same stub can be reused for other games (rule kit-stubs). Such NIDs are NOT counted
+    as present, even though the binary still imports them.
+  * `tested_fw`: the firmware a kit was actually run on, if not the one it targets.
+    "Present" evidence is weak (a backporter may leave an import in place that never
+    resolves or is never called), so it is recorded at the tested FW, not the target.
+  * Ampr / PlayGo emulation fakelibs are stored (used when a dump has none) but are not
+    firmware evidence.
 
 Evidence is only recorded for system-named modules (libkernel, libSce*), so that
 middleware shipped inside games (libcohtml, libRenoirCore ...) can't masquerade as
@@ -28,13 +37,15 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .scan import BinaryInfo, iter_binaries, scan_binary
+from .scan import BinaryInfo, is_loading_layer, iter_binaries, scan_binary
 
 SYSTEM_MODULE = re.compile(r"^(libkernel|libSce\w*)$")
 EXTRA_EXTS = {".psp"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kits (name TEXT PRIMARY KEY, fw INTEGER NOT NULL, source TEXT,
     title_id TEXT, added TEXT, store TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS stubs (kit TEXT, relpath TEXT, module TEXT, nid TEXT, body TEXT,
+    fw INTEGER);
 CREATE TABLE IF NOT EXISTS files (kit TEXT, relpath TEXT, role TEXT, module TEXT, sha256 TEXT,
     sdk_ps5 INTEGER, PRIMARY KEY (kit, relpath));
 CREATE TABLE IF NOT EXISTS exports (kit TEXT, relpath TEXT, module TEXT, nid TEXT);
@@ -63,6 +74,7 @@ class Kit:
     title_id: str
     added: str
     store: Path
+    tested_fw: int | None = None
 
     def path(self, relpath: str) -> Path:
         return self.store / relpath
@@ -94,14 +106,18 @@ class EvidenceDB:
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.root / "evidence.db")
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(kits)")}
+        if "tested_fw" not in cols:                       # migrate older databases
+            self.db.execute("ALTER TABLE kits ADD COLUMN tested_fw INTEGER")
+            self.db.commit()
 
     def close(self) -> None:
         self.db.close()
 
     # ---- kits -----------------------------------------------------------
     def kits(self) -> list[Kit]:
-        rows = self.db.execute("SELECT name, fw, source, title_id, added, store FROM kits ORDER BY name")
-        return [Kit(n, fw, s or "", t or "", a, Path(st)) for n, fw, s, t, a, st in rows]
+        rows = self.db.execute("SELECT name, fw, source, title_id, added, store, tested_fw FROM kits ORDER BY name")
+        return [Kit(n, fw, s or "", t or "", a, Path(st), tf) for n, fw, s, t, a, st, tf in rows]
 
     def kit(self, name: str) -> Kit | None:
         return next((k for k in self.kits() if k.name == name), None)
@@ -115,7 +131,7 @@ class EvidenceDB:
         k = self.kit(name)
         if not k:
             return False
-        for t in ("kits", "files", "exports", "evidence"):
+        for t in ("kits", "files", "exports", "evidence", "stubs"):
             col = "name" if t == "kits" else "kit"
             self.db.execute(f"DELETE FROM {t} WHERE {col}=?", (name,))
         self.db.commit()
@@ -124,7 +140,7 @@ class EvidenceDB:
         return True
 
     def add_kit(self, src: Path | str, fw: int, name: str | None = None, source: str = "",
-                replace: bool = False) -> dict:
+                replace: bool = False, tested_fw: int | None = None) -> dict:
         src = Path(src)
         with tempfile.TemporaryDirectory(prefix="ps5bp-kit-") as tmp:
             if src.is_file() and zipfile.is_zipfile(src):
@@ -141,9 +157,9 @@ class EvidenceDB:
                 if not replace:
                     raise ValueError(f"kit '{name}' already exists (use --replace)")
                 self.remove_kit(name)
-            return self._ingest(root, fw, name, source)
+            return self._ingest(root, fw, name, source, tested_fw)
 
-    def _ingest(self, root: Path, fw: int, name: str, source: str) -> dict:
+    def _ingest(self, root: Path, fw: int, name: str, source: str, tested_fw: int | None = None) -> dict:
         infos: list[BinaryInfo] = []
         for p in iter_binaries(root):
             rel = p.relative_to(root)
@@ -174,21 +190,32 @@ class EvidenceDB:
         replaced = {i.module for i in infos if i.role == "fakelib"}
         game_mods = {i.module for i in infos if i.role != "fakelib"}
         c = self.db.cursor()
-        c.execute("INSERT INTO kits VALUES (?,?,?,?,?,?)",
-                  (name, fw, source, title_id, datetime.datetime.now().isoformat(timespec="seconds"), str(store)))
-        n_present = n_absent = 0
+        c.execute("INSERT INTO kits (name, fw, source, title_id, added, store, tested_fw) VALUES (?,?,?,?,?,?,?)",
+                  (name, fw, source, title_id, datetime.datetime.now().isoformat(timespec="seconds"), str(store),
+                   tested_fw))
+        present_fw = max(fw, tested_fw) if tested_fw is not None else fw
+        n_present = n_absent = n_stubs = 0
         for i in infos:
             c.execute("INSERT INTO files VALUES (?,?,?,?,?,?)",
                       (name, i.path, i.role, i.module, i.sha256, i.sdk_ps5))
             if i.role == "fakelib":
                 c.executemany("INSERT INTO exports VALUES (?,?,?,?)",
                               [(name, i.path, i.module, n) for n in i.exports])
+            for mod, stubs in i.plt_patched.items():
+                if not is_system_module(mod):
+                    continue
+                c.executemany("INSERT INTO stubs VALUES (?,?,?,?,?,?)",
+                              [(name, i.path, mod, n, body, fw) for n, body in stubs.items()])
+                n_stubs += len(stubs)
+            if i.role == "fakelib" and is_loading_layer(i.module):
+                continue                                   # emulation layer: not FW evidence
             for mod, nids in i.imports_by_module.items():
                 if mod in replaced or mod in game_mods or not is_system_module(mod):
                     continue
+                keep = [n for n in nids if n not in i.plt_patched.get(mod, {})]
                 c.executemany("INSERT INTO evidence VALUES (?,?,?,1,?,?)",
-                              [(fw, mod, n, name, i.path) for n in nids])
-                n_present += len(nids)
+                              [(present_fw, mod, n, name, i.path) for n in keep])
+                n_present += len(keep)
             for mod, nids in i.stubbed_by_module.items():
                 if not is_system_module(mod):
                     continue
@@ -198,7 +225,8 @@ class EvidenceDB:
         self.db.commit()
         return {"name": name, "fw": fw, "root": str(root), "title_id": title_id,
                 "fakelibs": sorted(i.path for i in infos if i.role == "fakelib"),
-                "extras": [p.name for p in extras], "present": n_present, "absent": n_absent}
+                "extras": [p.name for p in extras], "present": n_present, "absent": n_absent,
+                "plt_stubs": n_stubs, "present_fw": present_fw}
 
     # ---- queries --------------------------------------------------------
     def present(self, module: str, target: int) -> set[str]:
@@ -211,6 +239,15 @@ class EvidenceDB:
         rows = self.db.execute("SELECT DISTINCT nid FROM evidence WHERE module=? AND present=0 AND fw>=?",
                                (module, target))
         return {r[0] for r in rows}
+
+    def stubbed(self, module: str, target: int) -> dict[str, list[tuple[str, str, int, str]]]:
+        """NIDs of `module` some kit replaced with a PLT stub for a FW >= target:
+        nid -> [(kit, body hex, kit fw, relpath)]."""
+        out: dict[str, list[tuple[str, str, int, str]]] = {}
+        for kit, rel, nid, body, fw in self.db.execute(
+                "SELECT kit, relpath, nid, body, fw FROM stubs WHERE module=? AND fw>=?", (module, target)):
+            out.setdefault(nid, []).append((kit, body, fw, rel))
+        return out
 
     def fakelib_candidates(self, module: str) -> list[tuple[Kit, KitFile, set[str]]]:
         out = []

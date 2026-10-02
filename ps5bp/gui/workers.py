@@ -16,15 +16,17 @@ class AnalyzeWorker(QThread):
     progress = pyqtSignal(str, int, int)
     error = pyqtSignal(str)
 
-    def __init__(self, game: Path, target: int, patches: list[Path]):
+    def __init__(self, game: Path, target: int, patches: list[Path], replace_dump: dict | None = None):
         super().__init__()
         self.game, self.target, self.patches = game, target, patches
+        self.replace_dump = replace_dump or {}
 
     def run(self) -> None:
         db = None
         try:
             db = EvidenceDB()
-            self.plan_ready.emit(plan(self.game, self.target, db, self.patches, progress=self.progress.emit))
+            self.plan_ready.emit(plan(self.game, self.target, db, self.patches, progress=self.progress.emit,
+                                      replace_dump=self.replace_dump))
         except Exception as e:                                   # noqa: BLE001
             self.error.emit(f"{e}\n\n{traceback.format_exc()}")
         finally:
@@ -80,7 +82,7 @@ class KitWorker(QThread):
             db = EvidenceDB()
             if self.action == "add":
                 r = db.add_kit(self.kw["src"], self.kw["fw"], self.kw.get("name") or None,
-                               self.kw.get("source", ""))
+                               self.kw.get("source", ""), tested_fw=self.kw.get("tested_fw"))
                 self.done.emit(f"kit added: {r}")
             else:
                 ok = db.remove_kit(self.kw["name"])
