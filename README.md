@@ -3,7 +3,7 @@
 Point it at a decrypted PS5 game dump (fake-signed SELFs, e.g. from ps5-app-dumper)
 and it analyzes — and, in later phases, builds — a backport for firmware 4.xx–7.xx.
 
-Status: **phase 4 — analyze, kit library / import coverage, build, fix rules + patch recipes.**
+Status: **phase 5 — CLI + PyQt6 GUI (analyze, kits, coverage, fix rules, build).**
 
 ```
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
@@ -54,6 +54,19 @@ input; any byte changed outside a recorded edit fails the build. A
 `backport-report.json/.txt` lists every edit.
 
 Overlay output contains only changed files + `fakelib/` — copy it over the game.
+
+## GUI
+
+```
+pip install -e '.[gui]'
+ps5bp-gui            # or: ps5bp gui
+```
+
+Pick the game folder and target FW, press **Analyze**: the Overview, Imports and Fix
+rules tabs fill in (recommended rules are starred but never pre-ticked; ticking a
+rule unticks anything it conflicts with). Choose overlay / full / in-place output and
+**Build backport**. Kits are added and removed on the Kits tab. Analysis and builds run
+in background threads; Cancel stops a build before it starts writing files.
 
 ## Fix rules
 
