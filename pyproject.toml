@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ps5bp"
+version = "0.1.0"
+description = "Analyze and backport PS5 game dumps to older firmware"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["capstone>=5", "numpy"]
+
+[project.optional-dependencies]
+gui = ["PyQt6"]
+dev = ["pytest"]
+
+[project.scripts]
+ps5bp = "ps5bp.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ps5bp*"]
+
+[tool.setuptools.package-data]
+ps5bp = ["data/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
