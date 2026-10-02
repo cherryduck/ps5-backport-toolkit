@@ -3,7 +3,7 @@
 Point it at a decrypted PS5 game dump (fake-signed SELFs, e.g. from ps5-app-dumper)
 and it analyzes — and, in later phases, builds — a backport for firmware 4.xx–7.xx.
 
-Status: **phase 2 — analyze + kit library / import coverage (read-only).**
+Status: **phase 3 — analyze, kit library / import coverage, build.**
 
 ```
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
@@ -35,6 +35,25 @@ libSceAgcDriver must come from the same build). `PS5BP_HOME` overrides the data 
 `analyze` reports, per binary: format, SDK version, needed libraries, import/export
 counts and detected features (PS5 Pro code path, PSSR/MFSR, PSSR 2 model, AudioOut2),
 plus which binaries need an SDK downgrade for the chosen target.
+
+## Build
+
+```
+ps5bp build /path/to/PPSA12345 --target 4 --out /path/to/PPSA12345-fw4          # overlay (default)
+ps5bp build /path/to/PPSA12345 --target 4 --out /path/to/full --mode full        # whole game, reflinked
+ps5bp build /path/to/PPSA12345 --target 4 --mode inplace                         # edits game, keeps .orig
+ps5bp build ... --dry-run                                                        # plan only
+```
+
+Steps: SDK downgrade of every binary newer than the target (eboot, prx, sprx, chosen
+fakelibs), known NID retargets (`ps5bp/data/nid_retarget.txt`, e.g. the BackPork libc
+patch), `param.json` sdkVersion / requiredSystemSoftwareVersion (byte-exact edit,
+formatting preserved), fakelib install from the kit library. SELFs are patched in place
+(no re-signing). Afterwards every output binary is re-parsed and diffed against its
+input; any byte changed outside a recorded edit fails the build. A
+`backport-report.json/.txt` lists every edit.
+
+Overlay output contains only changed files + `fakelib/` — copy it over the game.
 
 ## Tests
 
