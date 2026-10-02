@@ -1,6 +1,7 @@
 """Game-folder scanner: everything `ps5bp analyze` reports, no modification."""
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -43,6 +44,10 @@ class BinaryInfo:
     n_imports: int = 0
     n_exports: int = 0
     imports_by_lib: dict[str, list[str]] = field(default_factory=dict)
+    imports_by_module: dict[str, list[str]] = field(default_factory=dict)
+    exports: list[str] = field(default_factory=list)                # NIDs (own module)
+    stubbed_by_module: dict[str, list[str]] = field(default_factory=dict)
+    sha256: str = ""
     flags: list[str] = field(default_factory=list)
     error: str = ""
 
@@ -129,6 +134,10 @@ def scan_binary(path: Path, root: Path, role: str) -> BinaryInfo:
         info.n_imports = len(d.imports())
         info.n_exports = len(d.exports())
         info.imports_by_lib = {k: sorted(v) for k, v in d.imports_by_lib().items()}
+        info.imports_by_module = {k: sorted(v) for k, v in d.imports_by_module().items()}
+        info.exports = sorted(d.exported_nids())
+        info.stubbed_by_module = {k: sorted(v) for k, v in d.stubbed_by_module().items()}
+    info.sha256 = hashlib.sha256(b.data).hexdigest()
     info.flags = _flags(b, d)
     return info
 

@@ -7,6 +7,9 @@ Sony tags:
     0x61000047  exported library      name | ver<<32 | id<<48
     0x61000049  imported library      name | ver<<32 | id<<48
 Symbols are named 'NID#lib#module'.  Undefined symbols (shndx 0) are imports.
+Defined symbols whose lib id is an *export* library are exports.  Defined symbols
+whose lib id is an *import* library are imports that a backporter bound to a
+local stub ("stubbed"): evidence that the NID is absent on the kit's target FW.
 """
 from __future__ import annotations
 
@@ -54,6 +57,10 @@ class Symbol:
         return nidmod.split(self.name)[1]
 
     @property
+    def mod_id(self) -> int | None:
+        return nidmod.split(self.name)[2]
+
+    @property
     def defined(self) -> bool:
         return self.shndx != 0
 
@@ -74,12 +81,41 @@ class Dynamic:
         return [s for s in self.symbols if not s.defined and s.lib_id is not None]
 
     def exports(self) -> list[Symbol]:
-        return [s for s in self.symbols if s.defined and s.lib_id is not None and (s.info >> 4) in (1, 2)]
+        return [s for s in self.symbols if s.defined and s.lib_id in self.export_libs and s.mod_id == 0
+                and (s.info >> 4) in (1, 2)]
+
+    def stubbed(self) -> list[Symbol]:
+        """Imports bound to a local stub by a backporter (see module docstring)."""
+        return [s for s in self.symbols if s.defined and s.lib_id is not None
+                and s.lib_id not in self.export_libs and s.mod_id in self.modules]
 
     def lib_name(self, sym: Symbol) -> str:
-        table = self.export_libs if sym.defined else self.import_libs
+        exported = sym.defined and sym.lib_id in self.export_libs and sym.mod_id == 0
+        table = self.export_libs if exported else self.import_libs
         lib = table.get(sym.lib_id) if sym.lib_id is not None else None
         return lib.name if lib else "?"
+
+    def module_name(self, sym: Symbol) -> str:
+        """Module (file) an import/stubbed symbol comes from; own module for exports."""
+        if sym.mod_id == 0 and sym.defined:
+            return self.module.name if self.module else "?"
+        m = self.modules.get(sym.mod_id) if sym.mod_id is not None else None
+        return m.name if m else "?"
+
+    def imports_by_module(self) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for s in self.imports():
+            out.setdefault(self.module_name(s), set()).add(s.nid)
+        return out
+
+    def stubbed_by_module(self) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for s in self.stubbed():
+            out.setdefault(self.module_name(s), set()).add(s.nid)
+        return out
+
+    def exported_nids(self) -> set[str]:
+        return {s.nid for s in self.exports()}
 
     def imports_by_lib(self) -> dict[str, set[str]]:
         out: dict[str, set[str]] = {}

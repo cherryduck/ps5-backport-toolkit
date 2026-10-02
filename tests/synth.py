@@ -28,7 +28,8 @@ class Spec:
     import_libs: list[str] = field(default_factory=lambda: ["libkernel", "libc"])
     imports: list[tuple[str, int]] = field(default_factory=lambda: [("rTXw65xmLIA", 0), ("uMei1W9uyNo", 1)])
     export_libs: list[str] = field(default_factory=list)
-    exports: list[tuple[str, int]] = field(default_factory=list)
+    exports: list[tuple[str, int]] = field(default_factory=list)     # (nid, export-lib index)
+    stubbed: list[tuple[str, int]] = field(default_factory=list)     # (nid, import-lib index): bound to a local stub
     text: bytes = b"\x55\x48\x89\xe5\x31\xc0\x5d\xc3" + b"\xcc" * 8
     strings: bytes = b""
 
@@ -50,11 +51,15 @@ def build_elf(s: Spec) -> tuple[bytes, dict]:
     imp_libs = [add(n) for n in s.import_libs]
     exp_libs = [add(n) for n in s.export_libs]
     mod = add(s.module)
+    # ids as in real files: import lib i -> lib id i, module id i+1; export lib j -> id len(imports)+j, module 0
     syms = [(0, 0, 0, 0)]                                    # name, info, shndx, value
     for nid_, lib in s.imports:
-        syms.append((add(f"{nid_}#{b64id(lib)}#{b64id(lib)}"), 0x12, 0, 0))
+        syms.append((add(f"{nid_}#{b64id(lib)}#{b64id(lib + 1)}"), 0x12, 0, 0))
+    nimp = len(s.import_libs)
     for i, (nid_, lib) in enumerate(s.exports):
-        syms.append((add(f"{nid_}#{b64id(lib)}#{b64id(0)}"), 0x12, 1, 0x10 + i))
+        syms.append((add(f"{nid_}#{b64id(nimp + lib)}#{b64id(0)}"), 0x12, 1, 0x10 + i))
+    for nid_, lib in s.stubbed:
+        syms.append((add(f"{nid_}#{b64id(lib)}#{b64id(lib + 1)}"), 0x12, 1, 0x80))
     # data segment layout
     data = bytearray()
 
@@ -85,8 +90,8 @@ def build_elf(s: Spec) -> tuple[bytes, dict]:
              (0x17, jmprel_rva), (2, len(rela)), (0x14, 7)]
     tags += [(0x61000043, mod | (0x101 << 32))]
     tags += [(0x61000049, o | (1 << 32) | (i << 48)) for i, o in enumerate(imp_libs)]
-    tags += [(0x61000045, o | (0x101 << 32) | (i << 48)) for i, o in enumerate(imp_libs)]
-    tags += [(0x61000047, o | (1 << 32) | (i << 48)) for i, o in enumerate(exp_libs)]
+    tags += [(0x61000045, o | (0x101 << 32) | ((i + 1) << 48)) for i, o in enumerate(imp_libs)]
+    tags += [(0x61000047, o | (1 << 32) | ((nimp + i) << 48)) for i, o in enumerate(exp_libs)]
     tags += [(0, 0)]
     dyn = b"".join(struct.pack("<qQ", t, v) for t, v in tags)
     dyn_rva = place(dyn)

@@ -8,6 +8,9 @@ from pathlib import Path
 
 from . import __version__
 from .core import sdk
+from .core.coverage import Coverage, analyze as coverage_analyze
+from .core.evidence import EvidenceDB
+from .core.nid import name_of as nidname
 from .core.paramjson import fw64_str
 from .core.scan import FLAGS, GameScan, scan_game
 
@@ -50,6 +53,40 @@ def print_scan(gs: GameScan, target: int | None) -> None:
         print(f"WARNING: {w}")
 
 
+STATUS_ORDER = ["missing", "absent", "partial", "unverified", "fakelib", "system", "game"]
+
+
+def print_coverage(cov: Coverage, gs: GameScan) -> None:
+    print(f"\nImport coverage for FW {cov.target}.xx  (per module the game imports from)")
+    print(f"  {'module':30} {'status':8} {'NIDs':>5} {'proven':>6} {'absent':>6} {'unproven':>8}  source")
+    mods = sorted(cov.modules, key=lambda m: (STATUS_ORDER.index(m.status), m.module))
+    for m in mods:
+        src = ""
+        if m.choice:
+            c = m.choice
+            src = f"{c.kit} (FW{c.kit_fw}) {c.relpath}"
+            if c.missing:
+                src += f"  MISSING {len(c.missing)}: {' '.join(c.missing[:4])}"
+            if m.current:
+                src += "  [same as current]" if m.current == c.sha256 else "  [differs from current]"
+        elif m.status == "absent":
+            src = "PROVEN ABSENT on target: " + " ".join(f"{n} {nidname(n)}".strip() for n in m.absent[:4])
+        elif m.status == "unverified" and m.unproven:
+            src = "no evidence for: " + " ".join(m.unproven[:4]) + (" ..." if len(m.unproven) > 4 else "")
+        print(f"  {m.module:30} {m.status:8} {len(m.needed):5} {m.proven:6} {len(m.absent):6} "
+              f"{len(m.unproven):8}  {src}")
+    fl = cov.fakelibs()
+    print(f"\n  => {len(fl)} fakelib(s): " + (", ".join(f"{m.module} from {m.choice.kit}" for m in fl) or "none"))
+    for d in cov.deps:
+        print(f"  dependency: {d}")
+    ab = cov.by_status("absent")
+    if ab:
+        print(f"  !! {len(ab)} module(s) need NIDs proven absent on {cov.target}.xx and no fakelib can supply them;"
+              " the game will fail to resolve them unless patched (see fix rules).")
+    if cov.nonsystem_missing:
+        print(f"  NOT FOUND (not system, not shipped by game): {', '.join(cov.nonsystem_missing)}")
+
+
 def cmd_analyze(a) -> int:
     root = Path(a.game)
     if not root.is_dir():
@@ -66,6 +103,32 @@ def cmd_analyze(a) -> int:
         print()
     else:
         print_scan(gs, a.target)
+        if a.target:
+            db = EvidenceDB()
+            if db.kits():
+                print_coverage(coverage_analyze(gs, db, a.target), gs)
+            else:
+                print("\n(no kits ingested — `ps5bp kit add` to enable import coverage)")
+    return 0
+
+
+def cmd_kit(a) -> int:
+    db = EvidenceDB()
+    if a.kit_cmd == "add":
+        r = db.add_kit(a.path, a.fw, a.name, a.source or "", a.replace)
+        print(f"added kit '{r['name']}' (FW {r['fw']}.xx, {r['title_id'] or 'no title id'}) from {r['root']}")
+        print(f"  fakelibs: {', '.join(r['fakelibs'])}")
+        if r["extras"]:
+            print(f"  extras  : {', '.join(r['extras'])}")
+        print(f"  evidence: {r['present']} present, {r['absent']} absent (stubbed) NID records")
+    elif a.kit_cmd == "list":
+        for k in db.kits():
+            files = [f for f in db.kit_files(k.name) if f.role == "fakelib"]
+            print(f"{k.name:32} FW{k.fw}  {k.title_id:10} {len(files)} fakelibs  {k.source}")
+        if not db.kits():
+            print("no kits")
+    elif a.kit_cmd == "remove":
+        print("removed" if db.remove_kit(a.name) else f"no kit '{a.name}'")
     return 0
 
 
@@ -78,6 +141,18 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--target", type=int, choices=sdk.SUPPORTED_TARGETS, help="target firmware major")
     an.add_argument("--json", action="store_true", help="machine-readable output")
     an.set_defaults(func=cmd_analyze)
+    kit = sub.add_parser("kit", help="manage the fakelib kit library / evidence DB")
+    ks = kit.add_subparsers(dest="kit_cmd", required=True)
+    ka = ks.add_parser("add", help="ingest a backport kit (folder or .zip)")
+    ka.add_argument("path")
+    ka.add_argument("--fw", type=int, required=True, help="firmware major the kit targets")
+    ka.add_argument("--name")
+    ka.add_argument("--source", help="free text, e.g. DLPS / PSVIETHOA")
+    ka.add_argument("--replace", action="store_true")
+    ks.add_parser("list")
+    kr = ks.add_parser("remove")
+    kr.add_argument("name")
+    kit.set_defaults(func=cmd_kit)
     a = ap.parse_args(argv)
     return a.func(a)
 
