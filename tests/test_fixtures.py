@@ -36,3 +36,34 @@ def test_wolverine_scan():
     assert {"fakelib/libSceAgc.sprx", "fakelib/libScePsml.sprx"} <= fl
     assert all(not b.error for b in gs.binaries)
     assert gs.needs_downgrade(4) == []
+
+
+KITS = {"dlps-11386": 4, "viet-11386": 6}
+
+
+@pytest.fixture(scope="module")
+def kitdb(tmp_path_factory):
+    from ps5bp.core.evidence import EvidenceDB
+    if not all((ROOT / k).is_dir() for k in KITS):
+        pytest.skip("PPSA11386 kits not extracted under PS5BP_FIXTURES")
+    db = EvidenceDB(tmp_path_factory.mktemp("home"))
+    for k, fw in KITS.items():
+        db.add_kit(ROOT / k, fw, k)
+    return db
+
+
+def test_wolverine_fakelib_selection(kitdb):
+    """Selection reproduces DLPS's Wolverine module set; FW6 picks the exact AGC pair DLPS shipped."""
+    from ps5bp.core.coverage import analyze
+    gs = scan_game(WOLV)
+    shipped = {b.module: b.sha256 for b in gs.binaries if b.role == "fakelib"}
+    c4 = analyze(gs, kitdb, 4)
+    assert {m.module for m in c4.fakelibs()} == set(shipped)
+    assert all(not m.choice.missing for m in c4.fakelibs())
+    assert {m.module for m in c4.fakelibs() if m.choice.sha256 == shipped[m.module]} == \
+        {"libScePsml", "libSceAmpr", "libScePlayGo"}
+    assert [m.absent for m in c4.modules if m.module == "libkernel"] == [["NH6xARDOVv8"]]
+    assert not [d for d in c4.deps if d.startswith("CONFLICT")]
+    c6 = analyze(gs, kitdb, 6)
+    agc = {m.module: m.choice.sha256 for m in c6.fakelibs() if m.module.startswith("libSceAgc")}
+    assert agc == {k: shipped[k] for k in ("libSceAgc", "libSceAgcDriver")}
