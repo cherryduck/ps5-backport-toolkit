@@ -1,0 +1,15 @@
+PLAN.md
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+# never commit console binaries / game data / kits
+*.bin
+*.elf
+*.prx
+*.sprx
+*.self
+*.psp
+fixtures/

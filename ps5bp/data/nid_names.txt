@@ -1,0 +1,36 @@
+# Public symbol names; NIDs are computed from these. One per line.
+# kernel / memory
+sceKernelAllocateDirectMemory
+sceKernelAllocateMainDirectMemory
+sceKernelGetDirectMemorySize
+sceKernelAvailableDirectMemorySize
+sceKernelMapDirectMemory
+sceKernelMapDirectMemory2
+sceKernelReleaseDirectMemory
+sceKernelCheckedReleaseDirectMemory
+sceKernelDirectMemoryQuery
+sceKernelVirtualQuery
+sceKernelMapNamedFlexibleMemory
+sceKernelMemoryPoolExpand
+sceKernelMemoryPoolReserve
+sceKernelMemoryPoolCommit
+sceKernelLoadStartModule
+sceKernelGetCompiledSdkVersion
+sceKernelIsTrinityMode
+sceKernelIsNeoMode
+# libc
+exit
+_exit
+abort
+malloc
+free
+memset
+memcpy
+__stack_chk_fail
+# modules / misc
+sceSysmoduleLoadModule
+sceSysmoduleLoadModuleInternal
+sceAudioOut2ContextCreate
+scePsmlMfsr2Init
+scePsmlMfsr2CreateContext
+scePsmlMfsr2Term
