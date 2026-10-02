@@ -112,6 +112,21 @@ def cmd_analyze(a) -> int:
     return 0
 
 
+def cmd_build(a) -> int:
+    from .core.pipeline import BuildError, BuildOptions, build
+    opts = BuildOptions(target=a.target, mode=a.mode, out=Path(a.out) if a.out else None,
+                        fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
+                        strict=a.strict, dry_run=a.dry_run)
+    db = EvidenceDB() if not a.no_fakelibs else None
+    try:
+        rep = build(Path(a.game), opts, db, log=lambda m: print(f"[ps5bp] {m}", file=sys.stderr))
+    except BuildError as e:
+        print(f"build failed: {e}", file=sys.stderr)
+        return 1
+    print(rep.to_text(), end="")
+    return 0
+
+
 def cmd_kit(a) -> int:
     db = EvidenceDB()
     if a.kit_cmd == "add":
@@ -141,6 +156,19 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--target", type=int, choices=sdk.SUPPORTED_TARGETS, help="target firmware major")
     an.add_argument("--json", action="store_true", help="machine-readable output")
     an.set_defaults(func=cmd_analyze)
+    bd = sub.add_parser("build", help="produce a backport")
+    bd.add_argument("game")
+    bd.add_argument("--target", type=int, required=True, choices=sdk.SUPPORTED_TARGETS)
+    bd.add_argument("--out", help="output folder (required unless --mode inplace)")
+    bd.add_argument("--mode", choices=["overlay", "full", "inplace"], default="overlay",
+                    help="overlay: changed files + fakelib/ only (default); full: whole game, "
+                         "unchanged files reflinked/copied; inplace: edit the game folder, keep .orig backups")
+    bd.add_argument("--no-fakelibs", action="store_true", help="don't select/install fakelibs")
+    bd.add_argument("--no-retarget", action="store_true", help="skip known NID retargets (libc patch)")
+    bd.add_argument("--force", action="store_true", help="accept an input that already has fakelib/")
+    bd.add_argument("--strict", action="store_true", help="fail on absent/missing/partial coverage")
+    bd.add_argument("--dry-run", action="store_true", help="plan only, write nothing")
+    bd.set_defaults(func=cmd_build)
     kit = sub.add_parser("kit", help="manage the fakelib kit library / evidence DB")
     ks = kit.add_subparsers(dest="kit_cmd", required=True)
     ka = ks.add_parser("add", help="ingest a backport kit (folder or .zip)")

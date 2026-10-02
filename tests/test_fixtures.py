@@ -67,3 +67,18 @@ def test_wolverine_fakelib_selection(kitdb):
     c6 = analyze(gs, kitdb, 6)
     agc = {m.module: m.choice.sha256 for m in c6.fakelibs() if m.module.startswith("libSceAgc")}
     assert agc == {k: shipped[k] for k in ("libSceAgc", "libSceAgcDriver")}
+
+
+def test_build_psviethoa_fw6_to_fw4(kitdb, tmp_path):
+    """Real 6.xx -> 4.xx build: only SDK fields + 2 param.json bytes change; DLPS FW4 fakelibs installed."""
+    from ps5bp.core.pipeline import BuildOptions, build
+    src = ROOT / "viet-11386" / "PPSA11386-app0"
+    out = tmp_path / "out"
+    rep = build(src, BuildOptions(target=4, out=out, force=True), kitdb, log=lambda m: None)
+    assert rep.ok
+    assert sorted(e.file for e in rep.edits if e.kind == "sdk") == ["eboot.bin", "sce_module/libc.prx"]
+    for f in ("eboot.bin", "sce_module/libc.prx"):
+        assert sdk.find(Binary.load(out / f)).ps5 == 0x04000031
+    a, b = (src / "sce_sys/param.json").read_bytes(), (out / "sce_sys/param.json").read_bytes()
+    assert len(a) == len(b) and sum(x != y for x, y in zip(a, b)) == 2
+    assert {f["kit"] for f in rep.fakelibs} == {"dlps-11386"}

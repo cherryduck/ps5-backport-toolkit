@@ -1,0 +1,6 @@
+# Known import retargets applied by `ps5bp build` (old NID -> replacement NID).
+# Same-length rename of the dynamic-string entry, keeping the #lib#module suffix.
+# Applied only when the binary *imports* the old NID and the target FW is <= max_fw.
+#
+# old_nid      new_nid      max_fw  source / note
+4h6F1LLbTiw    IWIBBdTHit4  7       BackPork recommended libc.prx patch (as shipped in DLPS kits)
