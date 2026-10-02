@@ -1,83 +1,84 @@
 # ps5bp — PS5 backport toolkit (Linux)
 
 Point it at a decrypted PS5 game dump (fake-signed SELFs, e.g. from ps5-app-dumper)
-and it analyzes — and, in later phases, builds — a backport for firmware 4.xx–7.xx.
+and it builds a backport for firmware 4.xx–7.xx: SDK downgrade, `param.json`,
+automatically chosen fakelibs, and optional fixes for known problems (PS5 Pro / PSSR).
+When a backport crashes, `ps5bp klog` reads the console's crash log and tells you why.
 
-Status: **phase 5 — CLI + PyQt6 GUI (analyze, kits, coverage, fix rules, build).**
+Command line and PyQt6 GUI; the GUI is a thin layer over the same core.
+
+## Install
 
 ```
-python -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/ps5bp analyze /path/to/PPSA12345 --target 4
-.venv/bin/ps5bp analyze /path/to/PPSA12345 --json > scan.json
+pipx install '/path/to/ps5-backporter[gui]'       # ps5bp + ps5bp-gui on PATH
+scripts/install-desktop.sh                         # optional: app-menu entry
 ```
 
-## Kits and import coverage
+Standalone bundle (no Python needed on the target machine):
+
+```
+scripts/build-bundle.sh                            # -> dist/ps5bp/{ps5bp,ps5bp-gui}
+scripts/install-desktop.sh dist/ps5bp/ps5bp-gui
+```
+
+Development: `python -m venv .venv && .venv/bin/pip install -e '.[gui,dev]'`.
+
+## Typical session
 
 ```
 ps5bp kit add "DLPS-FW4xx-PPSA11386.zip" --fw 4 --name dlps-PPSA11386 --source DLPS
 ps5bp kit add "PSVIETHOA-PPSA11386_FW6xx.zip" --fw 6 --name psviethoa-PPSA11386
-ps5bp kit list
-ps5bp analyze /path/to/PPSA12345 --target 4
+ps5bp analyze /games/PPSA12345 --target 4          # what's needed, what's missing, which rules apply
+ps5bp build   /games/PPSA12345 --target 4 --out /games/PPSA12345-fw4 [--rule ...]
+# ...package + install, it crashes, capture klog...
+ps5bp klog crash.txt --game /games/PPSA12345-fw4
 ```
+
+Or `ps5bp-gui`: game folder → **Analyze** → tick rules → **Build backport**; the
+Crash log tab does the klog triage.
+
+## Kits and import coverage
 
 A kit is an existing backport's files (folder or zip), labelled with the firmware its
 author targeted. Its fakelibs are stored under `~/.local/share/ps5bp/kits/` (eboots
-are not kept) and it contributes evidence:
+are not kept; `PS5BP_HOME` overrides the location) and it contributes evidence:
 
 * every import its binaries resolve from the system => that NID exists on that FW (and later FWs)
 * every import a backporter bound to a local stub    => that NID is absent on that FW (and earlier)
 
-`analyze --target N` then classifies each module the game imports from as
+`analyze --target N` classifies each module the game imports from as
 `game` / `system` / `fakelib` / `partial` / `absent` / `unverified` / `missing`, picks
-the best fakelib per module, and repairs cross-fakelib pairs (e.g. libSceAgc +
-libSceAgcDriver must come from the same build). `PS5BP_HOME` overrides the data dir.
-
-`analyze` reports, per binary: format, SDK version, needed libraries, import/export
-counts and detected features (PS5 Pro code path, PSSR/MFSR, PSSR 2 model, AudioOut2),
-plus which binaries need an SDK downgrade for the chosen target.
+the best fakelib per module, and repairs cross-fakelib pairs (libSceAgc +
+libSceAgcDriver must come from the same build). `unverified` means "no evidence yet",
+not "broken" — it shrinks as kits are added. It also reports, per binary, format, SDK,
+needed libraries and detected features (PS5 Pro path, PSSR/MFSR, PSSR 2 model, AudioOut2).
 
 ## Build
 
 ```
-ps5bp build /path/to/PPSA12345 --target 4 --out /path/to/PPSA12345-fw4          # overlay (default)
-ps5bp build /path/to/PPSA12345 --target 4 --out /path/to/full --mode full        # whole game, reflinked
-ps5bp build /path/to/PPSA12345 --target 4 --mode inplace                         # edits game, keeps .orig
-ps5bp build ... --dry-run                                                        # plan only
+ps5bp build GAME --target 4 --out OUT              # overlay (default): changed files + fakelib/
+ps5bp build GAME --target 4 --out OUT --mode full  # whole game, unchanged files reflinked/copied
+ps5bp build GAME --target 4 --mode inplace         # edits GAME, keeps *.orig
+ps5bp build ... --dry-run                          # plan only
 ```
 
-Steps: SDK downgrade of every binary newer than the target (eboot, prx, sprx, chosen
-fakelibs), known NID retargets (`ps5bp/data/nid_retarget.txt`, e.g. the BackPork libc
-patch), `param.json` sdkVersion / requiredSystemSoftwareVersion (byte-exact edit,
-formatting preserved), fakelib install from the kit library. SELFs are patched in place
-(no re-signing). Afterwards every output binary is re-parsed and diffed against its
-input; any byte changed outside a recorded edit fails the build. A
-`backport-report.json/.txt` lists every edit.
-
-Overlay output contains only changed files + `fakelib/` — copy it over the game.
-
-## GUI
-
-```
-pip install -e '.[gui]'
-ps5bp-gui            # or: ps5bp gui
-```
-
-Pick the game folder and target FW, press **Analyze**: the Overview, Imports and Fix
-rules tabs fill in (recommended rules are starred but never pre-ticked; ticking a
-rule unticks anything it conflicts with). Choose overlay / full / in-place output and
-**Build backport**. Kits are added and removed on the Kits tab. Analysis and builds run
-in background threads; Cancel stops a build before it starts writing files.
+SDK downgrade of every binary newer than the target (eboot, prx, sprx, chosen fakelibs),
+known NID retargets (`ps5bp/data/nid_retarget.txt`), `param.json` sdkVersion /
+requiredSystemSoftwareVersion (byte-exact, formatting kept), fakelib install, then the
+enabled fix rules. SELFs are patched in place — no re-signing. Every output binary is
+re-parsed and diffed against its input; a byte changed outside a recorded edit fails the
+build. `backport-report.json/.txt` lists every edit. Packaging (sce_sys, PKG) is up to you.
 
 ## Fix rules
 
 ```
-ps5bp rules                                            # list rules + built-in recipes
+ps5bp rules                                        # list rules + built-in recipes
 ps5bp build GAME --target 4 --out OUT --rule pro-disable
 ps5bp build GAME --target 4 --out OUT --rule pssr-memory
 ps5bp build GAME --target 4 --out OUT --patch my-fix.json
 ```
 
-Every rule is off by default; `build` reports which ones are recommended and why.
+Every rule is off by default; `build` / the GUI say which are recommended and why.
 
 | rule | what it does |
 |---|---|
@@ -88,24 +89,36 @@ Every rule is off by default; `build` reports which ones are recommended and why
 
 ### Patch recipes
 
-JSON, verifiable and shareable — see the docstring in `ps5bp/core/recipe.py`. A recipe
-lists byte signatures that must match (so it refuses the wrong game version or an
+JSON, verifiable and shareable — format in the docstring of `ps5bp/core/recipe.py`. A
+recipe lists byte signatures that must match (so it refuses the wrong game version or an
 already-patched file), code caves appended to a segment (hex + `rel32`/`rel8`/`rip`
-fixups, `nid:XXXX` resolves to an import's PLT stub, `@label` to cave labels), call
-retargets with expected old targets, and plain old->new byte edits. Caves grow the
-segment in place inside the SELF; the build's verification still covers every byte.
+fixups; `nid:XXXX` = an import's PLT stub, `@label` = cave label), call retargets with
+their expected old targets, and plain old->new byte edits.
+
+## Crash-log triage
+
+```
+ps5bp klog crash.txt [--game GAME]                 # or: ... | ps5bp klog -
+```
+
+Finds the fatal-signal block, maps backtrace frames and `rip` to modules, filters the
+usual noise (fake-signed mount, missing save, offline PSN errors, kstuff), and with
+`--game` disassembles the call at each `/app0/` frame — e.g. for Wolverine on 11.60 it
+lands on the startup allocator calling `sceKernelAllocateDirectMemory` before `exit()`
+and suggests `pssr-memory` / `pro-disable`.
 
 ## Tests
 
 ```
-.venv/bin/pytest                                  # synthetic binaries, no game data needed
-PS5BP_FIXTURES=~/ps5bp-fixtures .venv/bin/pytest  # + real-folder tests (see tests/test_fixtures.py)
+.venv/bin/pytest                                   # synthetic binaries/logs, no game data needed
+PS5BP_FIXTURES=~/ps5bp-fixtures .venv/bin/pytest   # + real-folder tests (tests/test_fixtures.py)
 ```
 
-No console binaries, game data or fakelib kits are included or may be committed.
+No console binaries, game data, kits or logs are included or may be committed.
 
 ## Credits / prior art
 
 Format knowledge is public and was re-derived independently: SELF/ELF layout,
 PT_SCE_PROCPARAM SDK fields (idlesauce's SDK downgrade script), fakelib sideloading
-(BestPig's BackPork). No code from those projects is used.
+(BestPig's BackPork). The Wolverine PSSR memory recipe encodes the technique of the
+DLPS FW4 backport. No code from those projects is used.
