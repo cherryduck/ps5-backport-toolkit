@@ -128,6 +128,19 @@ def cmd_build(a) -> int:
     return 0
 
 
+def cmd_klog(a) -> int:
+    from .core import klog
+    text = sys.stdin.read() if a.log == "-" else Path(a.log).read_text(errors="replace")
+    t = klog.parse(text)
+    flags: list[str] = []
+    if a.game:
+        klog.symbolize(t, Path(a.game))
+        flags = scan_game(Path(a.game)).flags
+    klog.diagnose(t, flags)
+    print(t.to_text(), end="")
+    return 0 if t.crashes else 3
+
+
 def cmd_rules(a) -> int:
     from .core.recipe import builtin
     from .core.rules import registry
@@ -187,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="enable a fix rule (repeatable; see `ps5bp rules`)")
     bd.add_argument("--no-rule", action="append", default=[], metavar="NAME", help="disable a fix rule")
     bd.add_argument("--patch", action="append", default=[], metavar="FILE", help="apply a patch recipe (JSON)")
+    kl = sub.add_parser("klog", help="triage a crash log (klog)")
+    kl.add_argument("log", help="klog text file, or - for stdin")
+    kl.add_argument("--game", help="game folder the log is from (resolves backtrace calls)")
+    kl.set_defaults(func=cmd_klog)
     gu = sub.add_parser("gui", help="open the graphical interface")
     gu.set_defaults(func=lambda a: __import__("ps5bp.gui", fromlist=["main"]).main())
     rl = sub.add_parser("rules", help="list fix rules")

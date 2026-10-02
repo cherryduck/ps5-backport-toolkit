@@ -13,6 +13,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("PS5 Backporter")
     app.setApplicationVersion(__version__)
+    app.setDesktopFileName("ps5bp")                 # Wayland app_id -> matches ps5bp.desktop
+    from importlib import resources
+    from PyQt6.QtGui import QIcon
+    icon = resources.files("ps5bp").joinpath("data/ps5bp.svg")
+    if icon.is_file():
+        app.setWindowIcon(QIcon(str(icon)))
     w = MainWindow()
     w.show()
     return app.exec()

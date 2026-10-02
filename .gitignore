@@ -13,3 +13,4 @@ dist/
 *.self
 *.psp
 fixtures/
+.venv-bundle/

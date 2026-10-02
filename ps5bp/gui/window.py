@@ -140,6 +140,32 @@ class MainWindow(QMainWindow):
         kr.addStretch(1)
         kv.addLayout(kr)
         self.tabs.addTab(kw, "Kits")
+        # crash log
+        cw = QWidget()
+        cv = QVBoxLayout(cw)
+        cr = QHBoxLayout()
+        cr.addWidget(QLabel("Paste a klog captured while the game crashed, or load a file. "
+                            "The game folder above is used to resolve the backtrace."))
+        cr.addStretch(1)
+        b = QPushButton("Load file…")
+        b.clicked.connect(self._load_klog)
+        cr.addWidget(b)
+        b = QPushButton("Triage")
+        b.clicked.connect(self._triage)
+        cr.addWidget(b)
+        cv.addLayout(cr)
+        cs = QSplitter(Qt.Orientation.Vertical)
+        self.klog_in = QPlainTextEdit()
+        self.klog_in.setPlaceholderText("klog text…")
+        self.klog_in.setFont(QFont("monospace"))
+        cs.addWidget(self.klog_in)
+        self.klog_out = QPlainTextEdit()
+        self.klog_out.setReadOnly(True)
+        self.klog_out.setFont(QFont("monospace"))
+        cs.addWidget(self.klog_out)
+        cs.setSizes([200, 400])
+        cv.addWidget(cs, 1)
+        self.tabs.addTab(cw, "Crash log")
         # log
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -436,6 +462,25 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.log)
         if not getattr(self, "_headless", False):
             QMessageBox.critical(self, "Build failed", msg.split("\n\n")[0])
+
+    # ---- crash log -------------------------------------------------------------------------
+    def _load_klog(self) -> None:
+        f, _ = QFileDialog.getOpenFileName(self, "Crash log", "", "Logs (*.txt *.log);;All files (*)")
+        if f:
+            self.klog_in.setPlainText(Path(f).read_text(errors="replace"))
+
+    def _triage(self) -> None:
+        from ..core import klog
+        t = klog.parse(self.klog_in.toPlainText())
+        game = Path(self.game_edit.text()).expanduser()
+        flags = self.plan.scan.flags if self.plan else []
+        if (game / "eboot.bin").is_file():
+            try:
+                klog.symbolize(t, game)
+            except Exception as e:                       # noqa: BLE001
+                self.say(f"could not resolve backtrace against {game}: {e}")
+        klog.diagnose(t, flags)
+        self.klog_out.setPlainText(t.to_text())
 
     # ---- kits -----------------------------------------------------------------------------
     def _refresh_kits(self) -> None:
