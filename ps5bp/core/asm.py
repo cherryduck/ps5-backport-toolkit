@@ -112,3 +112,51 @@ def is_plt_entry(b: Binary, va: int, base: int) -> bool:
     """16-byte PS5 PLT entry: ff 25 d32 | 68 imm32 | e9 rel32."""
     e = b.read(va - base, 16)
     return e[:2] == b"\xff\x25" and e[6] == 0x68 and e[11] == 0xE9
+
+
+def plt_entries(b: Binary, dyn: Dynamic, base: int) -> list[tuple[str, int, bytes]]:
+    """(import name, runtime VA, 16 entry bytes) for EVERY jump-slot import, in relocation
+    order — including entries a backporter overwrote (which no longer start with ff25).
+
+    PS5 PLTs are PLT0 followed by one 16-byte entry per JUMP_SLOT relocation, so entry i
+    is at PLT0 + 16*(i+1). PLT0 is found from any intact entry (`e9` jumps back to it).
+    """
+    slots = list(dyn.plt.items())                       # GOT rva -> name, relocation order
+    if not slots:
+        return []
+    intact = plt_stubs(b, dyn, base)
+    plt0 = None
+    for name, va in intact.items():
+        e = b.read(va - base, 16)
+        if e[6] == 0x68 and e[11] == 0xE9:
+            idx = struct.unpack_from("<I", e, 7)[0]
+            cand = va + 16 + struct.unpack_from("<i", e, 12)[0]
+            if cand + 16 * (idx + 1) == va:
+                plt0 = cand
+                break
+    if plt0 is None:
+        return []
+    out = []
+    for i, (got, name) in enumerate(slots):
+        va = plt0 + 16 * (i + 1)
+        out.append((name, va, b.read(va - base, 16)))
+    return out
+
+
+def canonical_plt(e: bytes) -> bool:
+    return e[:2] == b"\xff\x25" and e[6] == 0x68 and e[11] == 0xE9
+
+
+def stub_body(e: bytes, va: int) -> bytes | None:
+    """The replacement code at the start of an overwritten PLT entry, up to and including
+    its first ret/ud2 — None if it doesn't end within the entry (e.g. a jump to a cave)."""
+    import capstone
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    n = 0
+    for i in md.disasm(e, va):
+        n += i.size
+        if i.mnemonic in ("ret", "ud2"):
+            return e[:n]
+        if i.mnemonic.startswith("j") or i.mnemonic == "call":
+            return None
+    return None

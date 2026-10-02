@@ -43,11 +43,24 @@ A kit is an existing backport's files (folder or zip), labelled with the firmwar
 author targeted. Its fakelibs are stored under `~/.local/share/ps5bp/kits/` (eboots
 are not kept; `PS5BP_HOME` overrides the location) and it contributes evidence:
 
-* every import its binaries resolve from the system => that NID exists on that FW (and later FWs)
+* every import its binaries make to the system      => that NID exists on that FW (and later FWs) —
+  weak evidence, so `--tested-fw N` records it at the FW the kit was actually run on
 * every import a backporter bound to a local stub    => that NID is absent on that FW (and earlier)
+* every PLT entry a backporter overwrote in place    => a stub for that NID, with its exact code,
+  reusable for other games (`--rule kit-stubs`); such imports never count as present
+
+```
+ps5bp kit add "ACE COMBAT 8 backport" --fw 4 --tested-fw 10    # built for 4.03, only run on 10.01
+```
+
+Ampr / PlayGo fakelibs are emulation layers that newer games need to load at all,
+whatever the FW: in kits they are stored but give no FW evidence; in a dump they are
+kept (status `dump`). Any other fakelib a dump ships is replaced by the kit-selected one.
 
 `analyze --target N` classifies each module the game imports from as
-`game` / `system` / `fakelib` / `partial` / `absent` / `unverified` / `missing`, picks
+`game` / `system` / `fakelib` / `dump` / `partial` / `absent` / `stubbed` / `unverified` /
+`missing` (`stubbed`: a kit replaced some of its NIDs with PLT stubs for this FW; evidence
+where one kit imports a NID and another stubs it is shown as CONFLICT, not as proof), picks
 the best fakelib per module, and repairs cross-fakelib pairs (libSceAgc +
 libSceAgcDriver must come from the same build). `unverified` means "no evidence yet",
 not "broken" — it shrinks as kits are added. It also reports, per binary, format, SDK,
@@ -60,7 +73,14 @@ ps5bp build GAME --target 4 --out OUT              # overlay (default): changed 
 ps5bp build GAME --target 4 --out OUT --mode full  # whole game, unchanged files reflinked/copied
 ps5bp build GAME --target 4 --mode inplace         # edits GAME, keeps *.orig
 ps5bp build ... --dry-run                          # plan only
+ps5bp build GAME --target 4.03 --out OUT           # minor version: SDK 0x04030031, param 0x0403...
+ps5bp build GAME ... --replace-dump-fakelib libSceAmpr[=KIT]   # swap the dump's Ampr emulator
 ```
+
+An input is "already backported" (needs `--force`) when its eboot's SDK is already at or
+below the target — a `fakelib/` folder alone (dumps ship Ampr/PlayGo layers) doesn't count.
+When the Ampr emulator is replaced, its `ampr_emu.index` is dropped (full), moved to
+`.orig` (inplace) or listed for deletion (overlay).
 
 SDK downgrade of every binary newer than the target (eboot, prx, sprx, chosen fakelibs),
 known NID retargets (`ps5bp/data/nid_retarget.txt`), `param.json` sdkVersion /
@@ -84,6 +104,8 @@ Every rule is off by default; `build` / the GUI say which are recommended and wh
 |---|---|
 | `pro-disable` | Pro hardware query (`NH6xARDOVv8`) -> base PS5 (both outputs 0, as DLPS's stub), `sceKernelIsTrinityMode` -> 0. The PLT entry becomes the stub; if the NID is proven absent on the target the import is bound locally. |
 | `pssr-memory` | Keep Pro/PSSR, fit its startup allocations. Per-game recipes in `ps5bp/data/recipes/` (Wolverine 01.001.005 included — reproduces the DLPS FW4 eboot byte for byte). Conflicts with `pro-disable`. |
+| `kit-stubs` | Every import some kit PLT-stubbed for this FW gets the same stub, in every game binary (eboot, prx, sprx); `--stubs-from KIT` limits the sources. Pro NIDs are left to pro-disable / pssr-memory when those are on. |
+| `mapflex-flags` | Clear flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory` (DLPS's AC8 fix; their older 11386 build kept it). |
 | `stub-absent` | Every other import proven absent on the target -> `return 0`, bound locally. Blunt. |
 | `user-patch` | Apply recipe files (`--patch`). |
 
@@ -94,6 +116,21 @@ recipe lists byte signatures that must match (so it refuses the wrong game versi
 already-patched file), code caves appended to a segment (hex + `rel32`/`rel8`/`rip`
 fixups; `nid:XXXX` = an import's PLT stub, `@label` = cave label), call retargets with
 their expected old targets, and plain old->new byte edits.
+
+## Learning a backport's game-specific edits (`kit learn`)
+
+```
+ps5bp kit learn ORIGINAL_DUMP KIT --out recipes/
+ps5bp build ORIGINAL_DUMP --target 4.03 --out OUT --rule kit-stubs --rule mapflex-flags --patch recipes/*.json
+```
+
+Diffs every kit binary against the dump's copy and sorts the changes: SDK fields, import
+renames, PLT stubs and the libc flag are things ps5bp does itself; whatever is left is game
+logic and becomes an anchored recipe. For DLPS's ACE COMBAT 8 4.03 build that is exactly 3
+edits (SaveDataMount3 field -1 -> 0, Wwise 7.1.4 -> 7.1 at two sites); with the kit added
+and those rules on, the build reproduces all 58 game binaries, `param.json` and the fakelib set
+DLPS shipped byte for byte (ELF payload; DLPS's re-signer also zeroes e_shnum, which ps5bp
+doesn't copy — and their unused libScePsml isn't shipped).
 
 ## Memory fixes (`memfix`)
 

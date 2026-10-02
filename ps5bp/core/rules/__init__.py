@@ -59,7 +59,9 @@ def registry() -> dict[str, Rule]:
     from .stub_absent import StubAbsent
     from .pssr_memory import PssrMemory
     from .user_patch import UserPatch
-    rules = [ProDisable(), PssrMemory(), StubAbsent(), UserPatch()]
+    from .kit_stubs import KitStubs
+    from .mapflex_flags import MapflexFlags
+    rules = [ProDisable(), PssrMemory(), KitStubs(), MapflexFlags(), StubAbsent(), UserPatch()]
     return {r.name: r for r in rules}
 
 

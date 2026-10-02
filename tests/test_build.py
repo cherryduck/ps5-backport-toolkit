@@ -111,7 +111,7 @@ def test_verification_catches_stray_edits(game, db, tmp_path, monkeypatch):
     import ps5bp.core.pipeline as pl
     real = pl.downgrade_sdk
 
-    def sneaky(b, target):
+    def sneaky(b, target, minor=0):
         r = real(b, target)
         b.data[0x100] ^= 0xFF                 # unrecorded change
         return r

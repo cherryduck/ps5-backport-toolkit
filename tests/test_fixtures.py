@@ -58,9 +58,14 @@ def test_wolverine_fakelib_selection(kitdb):
     gs = scan_game(WOLV)
     shipped = {b.module: b.sha256 for b in gs.binaries if b.role == "fakelib"}
     c4 = analyze(gs, kitdb, 4)
-    assert {m.module for m in c4.fakelibs()} == set(shipped)
+    # Ampr / PlayGo already in the folder are loading layers: kept, not re-selected
+    assert {m.module for m in c4.modules if m.status == "dump"} == {"libSceAmpr", "libScePlayGo"}
+    assert {m.module for m in c4.fakelibs()} == set(shipped) - {"libSceAmpr", "libScePlayGo"}
     assert all(not m.choice.missing for m in c4.fakelibs())
-    assert {m.module for m in c4.fakelibs() if m.choice.sha256 == shipped[m.module]} == \
+    assert {m.module for m in c4.fakelibs() if m.choice.sha256 == shipped[m.module]} == {"libScePsml"}
+    # ... unless replacing them is asked for: then the kits' builds match DLPS's byte for byte
+    c4r = analyze(gs, kitdb, 4, {"libSceAmpr": None, "libScePlayGo": None})
+    assert {m.module for m in c4r.fakelibs() if m.choice.sha256 == shipped[m.module]} == \
         {"libScePsml", "libSceAmpr", "libScePlayGo"}
     assert [m.absent for m in c4.modules if m.module == "libkernel"] == [["NH6xARDOVv8"]]
     assert not [d for d in c4.deps if d.startswith("CONFLICT")]
@@ -91,6 +96,7 @@ def test_wolverine_pssr_recipe_reproduces_dlps(kitdb, tmp_path):
     if not (src / "eboot.bin").is_file():
         pytest.skip("wolverine-orig-synth not present")
     out = tmp_path / "out"
-    rep = build(src, BuildOptions(target=4, out=out, rules={"pssr-memory"}), kitdb, log=lambda m: None)
+    # force: the reconstruction is derived from DLPS's file and is already at SDK 4.00
+    rep = build(src, BuildOptions(target=4, out=out, rules={"pssr-memory"}, force=True), kitdb, log=lambda m: None)
     assert rep.ok and any(f["applied"] for f in rep.findings if f["rule"] == "pssr-memory")
     assert (out / "eboot.bin").read_bytes() == (ROOT / "wolverine-dlps" / "eboot.bin").read_bytes()

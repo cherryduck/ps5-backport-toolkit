@@ -18,7 +18,7 @@ from ..core.rules import registry
 from .workers import AnalyzeWorker, BuildWorker, FuncWorker, KitWorker
 
 STATUS_COLOR = {"game": "#5a9", "system": "#5a9", "fakelib": "#49c", "partial": "#c93",
-                "unverified": "#888", "absent": "#d55", "missing": "#d55"}
+                "unverified": "#888", "absent": "#d55", "missing": "#d55", "stubbed": "#c93", "dump": "#49c"}
 STAGES = {"scan": "Scanning", "binaries": "Patching", "copy": "Copying game", "write": "Writing"}
 
 
@@ -245,8 +245,13 @@ class MainWindow(QMainWindow):
         self.out_btn.clicked.connect(self._browse_out)
         row.addWidget(self.out_btn)
         self.force = QCheckBox("Rebuild existing backport")
-        self.force.setToolTip("Accept a game folder that already contains fakelib/ (--force)")
+        self.force.setToolTip("Accept a game folder whose eboot is already at/below the target SDK (--force)")
         row.addWidget(self.force)
+        self.replace_ampr = QCheckBox("Replace dump's Ampr")
+        self.replace_ampr.setToolTip("Use a kit's Ampr emulator instead of the one shipped with the dump "
+                                     "(--replace-dump-fakelib libSceAmpr); the stale ampr_emu.index is removed")
+        self.replace_ampr.toggled.connect(self._invalidate)
+        row.addWidget(self.replace_ampr)
         v.addLayout(row)
         row = QHBoxLayout()
         self.progress = QProgressBar()
@@ -338,7 +343,8 @@ class MainWindow(QMainWindow):
             self.rule_table.setCellWidget(r, 0, cell)
             lines = [("" if f.applicable else "n/a: ") + f.title + (f" — {f.reason}" if f.reason else "")
                      for f in fs] or ["nothing detected"]
-            items = [("★ " if rec else "") + rule.name, "\n".join(lines), rule.summary
+            shown = lines if len(lines) <= 6 else lines[:5] + [f"… and {len(lines) - 5} more (hover for all)"]
+            items = [("★ " if rec else "") + rule.name, "\n".join(shown), rule.summary
                      + (f" (conflicts: {', '.join(rule.conflicts)})" if rule.conflicts else "")]
             for c, text in enumerate(items, 1):
                 it = QTableWidgetItem(text)
@@ -386,7 +392,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("target", self.target.currentData())
         self.say(f"analyzing {game} for FW {self.target.currentData()}.xx")
         self.busy(True)
-        self.worker = AnalyzeWorker(game, self.target.currentData(), list(self.patches))
+        self.worker = AnalyzeWorker(game, self.target.currentData(), list(self.patches), self.replace_dump())
         self.worker.progress.connect(self._progress)
         self.worker.plan_ready.connect(self._on_plan)
         self.worker.error.connect(self._on_analyze_error)
@@ -421,8 +427,18 @@ class MainWindow(QMainWindow):
                     notes.append(f"fakelib lacks {len(m.choice.missing)}")
                 if m.unproven and m.status == "unverified":
                     notes.append(f"{len(m.unproven)} without evidence")
+                if m.stubbed:
+                    kits = sorted({k for n in m.stubbed for k, *_ in m.stub_src.get(n, [])})
+                    notes.append(f"{len(m.stubbed)} PLT-stubbed by {', '.join(kits)} (rule kit-stubs)")
+                if m.conflict:
+                    notes.append(f"{len(m.conflict)} with conflicting evidence")
+                if m.note:
+                    notes.append(m.note)
                 rows.append([m.module, m.status, len(m.needed), m.proven, fl, "; ".join(notes)])
                 colors[i] = STATUS_COLOR.get(m.status, "#888")
+                if m.status == "stubbed":
+                    warns.append(f"{m.module}: {len(m.stubbed)} import(s) stubbed by kits for this FW — "
+                                 "consider the kit-stubs rule")
                 if m.status in ("absent", "missing", "partial"):
                     warns.append(f"{m.module}: {m.status}" + (f" ({', '.join(m.absent[:4])})" if m.absent else ""))
             fill(self.cov_table, rows, colors)
@@ -449,6 +465,7 @@ class MainWindow(QMainWindow):
         return BuildOptions(target=self.target.currentData(), mode=mode,
                             out=None if mode == "inplace" else Path(self.out_edit.text()).expanduser(),
                             force=self.force.isChecked(), rules=self.selected_rules(),
+                            replace_dump=self.replace_dump(),
                             patches=list(self.patches) if self.rule_boxes["user-patch"].isChecked() else [],
                             memfix=self.memfix_choices(),
                             klog_text=self.klog_in.toPlainText() or None)
@@ -524,6 +541,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Build failed", msg.split("\n\n")[0])
 
     # ---- memory fix ------------------------------------------------------------------------
+    def replace_dump(self) -> dict[str, str | None]:
+        return {"libSceAmpr": None} if self.replace_ampr.isChecked() else {}
+
     def _mf_clear(self, *_) -> None:
         """Site ids belong to one eboot: forget them when the game folder changes."""
         if hasattr(self, "mf_list"):
@@ -655,7 +675,8 @@ class MainWindow(QMainWindow):
             db.close()
         self.kit_label.setText(f"Kit library: {home()} — {len(kits)} kit(s). A kit is an existing backport's "
                                f"files; it supplies fakelibs and evidence of which functions each FW has.")
-        fill(self.kit_table, [[k.name, f"{k.fw}.xx", k.source, k.title_id, counts[k.name], k.added]
+        fill(self.kit_table, [[k.name, f"{k.fw}.xx" + (f" (tested {k.tested_fw})" if k.tested_fw else ""),
+                               k.source, k.title_id, counts[k.name], k.added]
                               for k in kits])
 
     def _add_kit(self, is_zip: bool) -> None:
@@ -669,10 +690,15 @@ class MainWindow(QMainWindow):
                                      4, 1, 10)
         if not ok:
             return
+        tested, ok = QInputDialog.getInt(self, "Tested on", "Firmware the kit was actually run on, per its "
+                                         "author's notes (e.g. 10 if only tested on 10.01):", fw, 1, 13)
+        if not ok:
+            return
         name, ok = QInputDialog.getText(self, "Kit name", "Name (blank = automatic):")
         if not ok:
             return
-        self._run_kit(KitWorker("add", src=Path(src), fw=fw, name=name.strip()))
+        self._run_kit(KitWorker("add", src=Path(src), fw=fw, name=name.strip(),
+                                tested_fw=None if tested == fw else tested))
 
     def _remove_kit(self) -> None:
         rows = {i.row() for i in self.kit_table.selectedItems()}

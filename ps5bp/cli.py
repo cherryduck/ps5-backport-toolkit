@@ -25,7 +25,8 @@ def print_scan(gs: GameScan, target: int | None) -> None:
     print(f"param.json: sdk {fw64_str(gs.param_sdk)}  requiredSystemSoftware {fw64_str(gs.param_required_fw)}")
     ms = gs.max_sdk()
     print(f"Built SDK : {sdk.fw_str(ms) if ms else '?'}"
-          + ("   (already backported: fakelib/ present)" if gs.has_fakelib else ""))
+          + ("   (fakelib/ present: " + ", ".join(sorted({b.module for b in gs.binaries if b.role == "fakelib"}))
+             + ")" if gs.has_fakelib else ""))
     print()
     print(f"{'binary':44} {'kind':5} {'SDK':>5} {'imports':>7} {'exports':>7}  flags")
     for b in gs.binaries:
@@ -43,9 +44,10 @@ def print_scan(gs: GameScan, target: int | None) -> None:
         for f in gs.flags:
             print(f"  [{f}] {FLAGS.get(f, '')}")
     if target:
-        ps5, ps4 = sdk.SDK_PAIRS[target]
-        todo = gs.needs_downgrade(target)
-        print(f"\nTarget FW {target}.xx (SDK {_hex(ps5)} / PS4 {_hex(ps4)}): "
+        major, minor = target
+        ps5, ps4 = sdk.target_pair(major, minor)
+        todo = gs.needs_downgrade(major, minor)
+        print(f"\nTarget FW {sdk.target_str(major, minor)} (SDK {_hex(ps5)} / PS4 {_hex(ps4)}): "
               f"{len(todo)} binar{'y' if len(todo) == 1 else 'ies'} need SDK downgrade")
         for b in todo:
             print(f"  {b.path}  {b.sdk_str()} -> {sdk.fw_str(ps5)}")
@@ -53,7 +55,7 @@ def print_scan(gs: GameScan, target: int | None) -> None:
         print(f"WARNING: {w}")
 
 
-STATUS_ORDER = ["missing", "absent", "partial", "unverified", "fakelib", "system", "game"]
+STATUS_ORDER = ["missing", "absent", "stubbed", "partial", "unverified", "fakelib", "dump", "system", "game"]
 
 
 def print_coverage(cov: Coverage, gs: GameScan) -> None:
@@ -71,20 +73,50 @@ def print_coverage(cov: Coverage, gs: GameScan) -> None:
                 src += "  [same as current]" if m.current == c.sha256 else "  [differs from current]"
         elif m.status == "absent":
             src = "PROVEN ABSENT on target: " + " ".join(f"{n} {nidname(n)}".strip() for n in m.absent[:4])
+        elif m.status == "stubbed":
+            kits = sorted({k for n in m.stubbed for k, *_ in m.stub_src.get(n, [])})
+            src = f"PLT-stubbed by {', '.join(kits)}: " + " ".join(m.stubbed[:4]) + (" ..." if len(m.stubbed) > 4 else "")
+        elif m.status == "dump":
+            src = m.note
         elif m.status == "unverified" and m.unproven:
             src = "no evidence for: " + " ".join(m.unproven[:4]) + (" ..." if len(m.unproven) > 4 else "")
+        if m.choice and m.note:
+            src += f"  ({m.note})"
+        elif m.note and m.status != "dump":
+            src += f"  ({m.note})"
+        if m.conflict:
+            src += f"  CONFLICT {len(m.conflict)}: present per one kit, stubbed/absent per another"
         print(f"  {m.module:30} {m.status:8} {len(m.needed):5} {m.proven:6} {len(m.absent):6} "
               f"{len(m.unproven):8}  {src}")
     fl = cov.fakelibs()
     print(f"\n  => {len(fl)} fakelib(s): " + (", ".join(f"{m.module} from {m.choice.kit}" for m in fl) or "none"))
     for d in cov.deps:
         print(f"  dependency: {d}")
+    st = [m for m in cov.modules if m.stub_src and not m.choice]
+    if st:
+        print(f"  {sum(len(m.stub_src) for m in st)} imported NID(s) were PLT-stubbed by kits for this FW "
+              "— `--rule kit-stubs` reuses those stubs")
     ab = cov.by_status("absent")
     if ab:
         print(f"  !! {len(ab)} module(s) need NIDs proven absent on {cov.target}.xx and no fakelib can supply them;"
               " the game will fail to resolve them unless patched (see fix rules).")
     if cov.nonsystem_missing:
         print(f"  NOT FOUND (not system, not shipped by game): {', '.join(cov.nonsystem_missing)}")
+
+
+def _target(s: str) -> tuple[int, int]:
+    try:
+        return sdk.parse_target(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
+def _replace_dump(a) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for x in getattr(a, "replace_dump_fakelib", []) or []:
+        mod, _, kit = x.partition("=")
+        out[mod] = kit or None
+    return out
 
 
 def cmd_analyze(a) -> int:
@@ -106,7 +138,7 @@ def cmd_analyze(a) -> int:
         if a.target:
             db = EvidenceDB()
             if db.kits():
-                print_coverage(coverage_analyze(gs, db, a.target), gs)
+                print_coverage(coverage_analyze(gs, db, a.target[0], _replace_dump(a)), gs)
             else:
                 print("\n(no kits ingested — `ps5bp kit add` to enable import coverage)")
     return 0
@@ -114,7 +146,7 @@ def cmd_analyze(a) -> int:
 
 def cmd_build(a) -> int:
     from .core.pipeline import BuildError, BuildOptions, build
-    opts = BuildOptions(target=a.target, mode=a.mode, out=Path(a.out) if a.out else None,
+    opts = BuildOptions(target=a.target[0], target_minor=a.target[1], replace_dump=_replace_dump(a), stubs_from=list(a.stubs_from), mode=a.mode, out=Path(a.out) if a.out else None,
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
                         strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
                         patches=[Path(x) for x in a.patch], memfix=list(a.memfix),
@@ -207,18 +239,55 @@ def cmd_rules(a) -> int:
 def cmd_kit(a) -> int:
     db = EvidenceDB()
     if a.kit_cmd == "add":
-        r = db.add_kit(a.path, a.fw, a.name, a.source or "", a.replace)
+        r = db.add_kit(a.path, a.fw, a.name, a.source or "", a.replace, a.tested_fw)
         print(f"added kit '{r['name']}' (FW {r['fw']}.xx, {r['title_id'] or 'no title id'}) from {r['root']}")
         print(f"  fakelibs: {', '.join(r['fakelibs'])}")
         if r["extras"]:
             print(f"  extras  : {', '.join(r['extras'])}")
-        print(f"  evidence: {r['present']} present, {r['absent']} absent (stubbed) NID records")
+        print(f"  evidence: {r['present']} present (at FW {r['present_fw']}), {r['absent']} absent (bound to stubs), "
+              f"{r['plt_stubs']} PLT stub(s)")
     elif a.kit_cmd == "list":
         for k in db.kits():
             files = [f for f in db.kit_files(k.name) if f.role == "fakelib"]
-            print(f"{k.name:32} FW{k.fw}  {k.title_id:10} {len(files)} fakelibs  {k.source}")
+            tf = f" (tested {k.tested_fw})" if k.tested_fw is not None else ""
+            print(f"{k.name:32} FW{k.fw}{tf}  {k.title_id:10} {len(files)} fakelibs  {k.source}")
         if not db.kits():
             print("no kits")
+    elif a.kit_cmd == "learn":
+        import json as _json
+        from .core.learn import learn
+        orig = Path(a.original)
+        tid = ""
+        pj = orig / "sce_sys/param.json"
+        if pj.is_file():
+            from .core.paramjson import ParamJson
+            try:
+                tid = ParamJson.load(pj).title_id
+            except ValueError:
+                pass
+        reps, recipes = learn(orig, Path(a.kit), tid)
+        totals: dict[str, int] = {}
+        for r in reps:
+            for k, v in r.classes.items():
+                totals[k] = totals.get(k, 0) + v
+            if r.problem:
+                print(f"{r.file}: {r.problem}")
+            for e in r.edits:
+                print(f"{r.file}: {e['va']}  {e['old']} -> {e['new']}   {e['note']}")
+        print("\nchanged bytes by kind: " + ", ".join(f"{k} {v}" for k, v in sorted(totals.items())))
+        print("  sdk / imports: done by every build;  plt-stub: --rule kit-stubs (after `kit add`);  "
+              "mapflex: --rule mapflex-flags;  game: the recipe(s) below")
+        hdr = sorted({h for r in reps for h in r.header_only})
+        if hdr:
+            print(f"  not reproduced: ELF header edits ({', '.join(hdr)[:120]}) — re-signing artefacts")
+        outd = Path(a.out)
+        outd.mkdir(parents=True, exist_ok=True)
+        for rec in recipes:
+            f = outd / f"{rec['name']}.json"
+            f.write_text(_json.dumps(rec, indent=1))
+            print(f"wrote {f}  ({len(rec['ops'])} edit(s)) — apply with: ps5bp build ... --patch {f}")
+        if not recipes:
+            print("no game-specific edits to learn")
     elif a.kit_cmd == "remove":
         print("removed" if db.remove_kit(a.name) else f"no kit '{a.name}'")
     return 0
@@ -230,19 +299,24 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     an = sub.add_parser("analyze", help="scan a game folder (read-only)")
     an.add_argument("game", help="game root (folder containing eboot.bin and sce_sys/)")
-    an.add_argument("--target", type=int, choices=sdk.SUPPORTED_TARGETS, help="target firmware major")
+    an.add_argument("--target", type=_target, help="target firmware: 4..7, or major.minor such as 4.03")
+    an.add_argument("--replace-dump-fakelib", action="append", default=[], metavar="MODULE[=KIT]",
+                    help="use a kit's build instead of the dump's own libSceAmpr / libScePlayGo")
     an.add_argument("--json", action="store_true", help="machine-readable output")
     an.set_defaults(func=cmd_analyze)
     bd = sub.add_parser("build", help="produce a backport")
     bd.add_argument("game")
-    bd.add_argument("--target", type=int, required=True, choices=sdk.SUPPORTED_TARGETS)
+    bd.add_argument("--target", type=_target, required=True, help="4..7, or major.minor such as 4.03")
+    bd.add_argument("--replace-dump-fakelib", action="append", default=[], metavar="MODULE[=KIT]",
+                    help="use a kit's build instead of the dump's own libSceAmpr / libScePlayGo "
+                         "(removes the stale ampr_emu.index)")
     bd.add_argument("--out", help="output folder (required unless --mode inplace)")
     bd.add_argument("--mode", choices=["overlay", "full", "inplace"], default="overlay",
                     help="overlay: changed files + fakelib/ only (default); full: whole game, "
                          "unchanged files reflinked/copied; inplace: edit the game folder, keep .orig backups")
     bd.add_argument("--no-fakelibs", action="store_true", help="don't select/install fakelibs")
     bd.add_argument("--no-retarget", action="store_true", help="skip known NID retargets (libc patch)")
-    bd.add_argument("--force", action="store_true", help="accept an input that already has fakelib/")
+    bd.add_argument("--force", action="store_true", help="accept an input whose eboot is already at/below the target SDK")
     bd.add_argument("--strict", action="store_true", help="fail on absent/missing/partial coverage")
     bd.add_argument("--dry-run", action="store_true", help="plan only, write nothing")
     bd.add_argument("--rule", action="append", default=[], metavar="NAME",
@@ -251,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
     bd.add_argument("--patch", action="append", default=[], metavar="FILE", help="apply a patch recipe (JSON)")
     bd.add_argument("--memfix", action="append", default=[], metavar="SITE:VARIANT[:AMOUNT]",
                     help="generated memory fix (see `ps5bp memfix GAME`); records a trial")
+    bd.add_argument("--stubs-from", action="append", default=[], metavar="KIT",
+                    help="kit-stubs: use only stubs from this kit (repeatable)")
     bd.add_argument("--klog", help="crash log: page-split hooks only the callers on its crash path")
     mf = sub.add_parser("memfix", help="find failing memory allocations, generate fixes, track console trials")
     mf.add_argument("game")
@@ -278,6 +354,12 @@ def main(argv: list[str] | None = None) -> int:
     ka.add_argument("--name")
     ka.add_argument("--source", help="free text, e.g. DLPS / PSVIETHOA")
     ka.add_argument("--replace", action="store_true")
+    ka.add_argument("--tested-fw", type=int, help="firmware the kit was actually run on, if not --fw "
+                    "(its 'present' evidence is then recorded for that FW)")
+    kn = ks.add_parser("learn", help="turn a kit's game-specific code edits into recipes")
+    kn.add_argument("original", help="the original (un-backported) game dump")
+    kn.add_argument("kit", help="the backport kit folder for the same game version")
+    kn.add_argument("--out", default=".", help="where to write the recipe JSON (default: .)")
     ks.add_parser("list")
     kr = ks.add_parser("remove")
     kr.add_argument("name")

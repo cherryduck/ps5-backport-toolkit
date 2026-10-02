@@ -177,7 +177,7 @@ def test_wolverine_generated_fix_equals_dlps(tmp_path, monkeypatch):
     monkeypatch.setenv("PS5BP_HOME", str(tmp_path / "home"))
     from ps5bp.core.pipeline import BuildOptions, build
     out = tmp_path / "out"
-    rep = build(SYN, BuildOptions(target=4, out=out, fakelibs=False,
+    rep = build(SYN, BuildOptions(target=4, out=out, fakelibs=False, force=True,
                                   memfix=["4171888:shrink:128M", "3d77bbc:page-split"], klog=KLOG),
                 log=lambda *_: None)
     assert rep.ok and rep.memfix_trial == 1 and (out / "memfix-recipe.json").is_file()
@@ -192,7 +192,7 @@ def test_promoted_recipe_supersedes_builtin(tmp_path, monkeypatch):
     n, _ = memfix.new_trial("", rec, SYN, 4)
     memfix.record_result(SYN, "", n, True)
     out = tmp_path / "out"
-    rep = build(SYN, BuildOptions(target=4, out=out, fakelibs=False, rules={"pssr-memory"}), log=lambda *_: None)
+    rep = build(SYN, BuildOptions(target=4, out=out, fakelibs=False, force=True, rules={"pssr-memory"}), log=lambda *_: None)
     applied = [f["title"] for f in rep.findings if f["applied"]]
     assert len(applied) == 1 and "memfix-ok" in applied[0]           # user recipe only, built-in skipped
     assert (out / "eboot.bin").read_bytes() == (ROOT / "wolverine-dlps" / "eboot.bin").read_bytes()

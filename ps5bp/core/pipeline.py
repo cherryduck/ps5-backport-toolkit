@@ -31,7 +31,7 @@ from .binary import Binary
 from .coverage import Coverage, analyze as coverage_analyze
 from .evidence import EvidenceDB
 from .nid import split as nid_split
-from .scan import GameScan, scan_game
+from .scan import is_loading_layer, GameScan, scan_game
 
 MODES = ("overlay", "full", "inplace")
 FICLONE = 0x40049409
@@ -58,6 +58,7 @@ class Edit:
 @dataclass
 class BuildOptions:
     target: int
+    target_minor: int = 0        # BCD minor: 4.03 -> 0x03 (SDK 0x04030031, param 0x0403...)
     mode: str = "overlay"
     out: Path | None = None
     fakelibs: bool = True
@@ -71,6 +72,8 @@ class BuildOptions:
     memfix: list[str] = field(default_factory=list)    # generated memory fixes (SITE:VARIANT[:AMOUNT])
     klog: Path | None = None                           # crash log steering memfix caller choice
     klog_text: str | None = None                       # same, as text (GUI)
+    replace_dump: dict[str, str | None] = field(default_factory=dict)  # loading layer -> kit (None = best)
+    stubs_from: list[str] = field(default_factory=list)                # kit-stubs: only these kits
 
 
 @dataclass
@@ -89,13 +92,15 @@ class BuildReport:
     coverage: dict = field(default_factory=dict)
     findings: list[dict] = field(default_factory=list)
     memfix_trial: int | None = None
+    target_str: str = ""
     ok: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1, default=str)
 
     def to_text(self) -> str:
-        L = [f"ps5bp backport report — {self.title or '?'} [{self.title_id or '?'}] -> FW {self.target}.xx",
+        L = [f"ps5bp backport report — {self.title or '?'} [{self.title_id or '?'}] -> FW "
+             f"{self.target_str or str(self.target) + '.xx'}",
              f"mode {self.mode}, output {self.out}, {'OK' if self.ok else 'FAILED'}", ""]
         by: dict[str, list[Edit]] = {}
         for e in self.edits:
@@ -135,8 +140,8 @@ def load_retargets() -> list[tuple[str, str, int, str]]:
 
 
 # ---- binary edits --------------------------------------------------------------
-def downgrade_sdk(b: Binary, target: int) -> list[tuple[int, str, str, str]]:
-    ps5, ps4 = sdk.SDK_PAIRS[target]
+def downgrade_sdk(b: Binary, target: int, minor: int = 0) -> list[tuple[int, str, str, str]]:
+    ps5, ps4 = sdk.target_pair(target, minor)
     p = sdk.find(b)
     if p is None or p.ps5 <= ps5:
         return []
@@ -170,9 +175,9 @@ def retarget_imports(b: Binary, target: int, table) -> list[tuple[int, str, str,
 _PJ_KEYS = ("sdkVersion", "requiredSystemSoftwareVersion")
 
 
-def patch_param_json(text: str, target: int) -> tuple[str, list[tuple[str, str, str]]]:
+def patch_param_json(text: str, target: int, minor: int = 0) -> tuple[str, list[tuple[str, str, str]]]:
     """Lower version fields to the target, editing the text in place (keeps formatting)."""
-    want = int(f"{target:02d}", 16) << 56        # BCD major in the top byte: 4 -> 0x0400000000000000
+    want = int(f"{target:02d}", 16) << 56 | (minor & 0xFF) << 48   # 4.03 -> 0x0403000000000000
     changes: list[tuple[str, str, str]] = []
     pat = re.compile(r'"(' + "|".join(_PJ_KEYS) + r')"(\s*:\s*)"(0x[0-9a-fA-F]+)"')
 
@@ -257,19 +262,22 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     gs = scan_game(game, progress=lambda i, n, name: prog("scan", i + 1, n))
     rep = BuildReport(str(game), gs.title_id, gs.title, opts.target, opts.mode, str(out),
                       datetime.datetime.now().isoformat(timespec="seconds"))
+    rep.target_str = sdk.target_str(opts.target, opts.target_minor)
     rep.warnings += gs.warnings
     bad = [b for b in gs.binaries if b.error and b.role != "fakelib"]
     if bad:
         raise BuildError("cannot process: " + "; ".join(f"{b.path}: {b.error}" for b in bad))
     if not gs.eboot:
         raise BuildError("no eboot.bin in the game folder")
-    if gs.has_fakelib and not opts.force:
-        raise BuildError("game already contains fakelib/ (already backported?) — use --force to rebuild it")
+    ps5_want, _ = sdk.target_pair(opts.target, opts.target_minor)
+    if gs.eboot.sdk_ps5 is not None and gs.eboot.sdk_ps5 <= ps5_want and not opts.force:
+        raise BuildError(f"eboot.bin is already SDK {gs.eboot.sdk_str()} (already backported?) — "
+                         "use --force to rebuild it")
 
     # 2. coverage / fakelibs
     cov: Coverage | None = None
     if db is not None and db.kits():
-        cov = coverage_analyze(gs, db, opts.target)
+        cov = coverage_analyze(gs, db, opts.target, opts.replace_dump)
         rep.coverage = {m.module: m.status for m in cov.modules}
         for m in cov.modules:
             if m.status in ("absent", "missing", "partial"):
@@ -293,7 +301,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
 
     def process(rel: str, src: Path, kind_note: str = "") -> None:
         b = get(rel, src)
-        for off, old, new, note in downgrade_sdk(b, opts.target):
+        for off, old, new, note in downgrade_sdk(b, opts.target, opts.target_minor):
             rep.edits.append(Edit(rel, "sdk", off, old, new, note))
         for off, old, new, note in retarget_imports(b, opts.target, retargets):
             rep.edits.append(Edit(rel, "retarget", off, old, new, note))
@@ -337,7 +345,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     ctx = RuleContext(gs, cov, opts.target, load=lambda rel: get(rel, game / rel),
                       edit=lambda file, kind, off, old, new, note="": rep.edits.append(
                           Edit(file, kind, off, old, new, note)),
-                      options={"patches": patches})
+                      options={"patches": patches, "enabled": set(active), "stubs_from": opts.stubs_from})
     for f in detect_all(ctx):
         applied = False
         if f.rule in active:
@@ -365,13 +373,31 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             process(rel, kit.path(c.relpath), kind_note="fakelib")
             rep.fakelibs.append({"file": rel, "module": m.module, "kit": c.kit, "kit_fw": c.kit_fw,
                                  "sha256": c.sha256})
-            rep.edits.append(Edit(rel, "fakelib", -1, "", c.kit, f"replaces system {m.module}"))
-    # stale fakelibs in a --force rebuild
-    if gs.has_fakelib and opts.mode == "inplace":
-        chosen = {f["file"] for f in rep.fakelibs}
-        for bi in gs.binaries:
-            if bi.role == "fakelib" and bi.path not in chosen and opts.fakelibs and cov:
-                rep.warnings.append(f"{bi.path}: left in place (not selected by coverage)")
+            what = (f"replaces the dump's {m.module}" if m.current else
+                    (f"{m.module} emulation layer" if is_loading_layer(m.module) else f"replaces system {m.module}"))
+            rep.edits.append(Edit(rel, "fakelib", -1, "", c.kit, what))
+    # fakelibs shipped by the input (dump layers / earlier backport)
+    chosen_files = {f["file"] for f in rep.fakelibs}
+    chosen_mods = {f["module"] for f in rep.fakelibs}
+    superseded: list[str] = []                  # input fakelib files replaced under another name
+    for bi in gs.binaries:
+        if bi.role != "fakelib" or bi.path in chosen_files:
+            continue
+        if bi.module in chosen_mods:
+            superseded.append(bi.path)
+        elif is_loading_layer(bi.module):
+            log(f"keeping the dump's {bi.module} ({bi.path}): emulation layer")
+        elif opts.fakelibs and cov:
+            rep.warnings.append(f"{bi.path}: the input's own fakelib kept — no kit build of {bi.module or '?'}")
+    stale_index = []
+    if any(f["module"].startswith("libSceAmpr") for f in rep.fakelibs) and \
+            any(bi.role == "fakelib" and bi.module.startswith("libSceAmpr") for bi in gs.binaries):
+        stale_index = [n for n in ("ampr_emu.index", "ampr_emu.index.tmp") if (game / n).exists()]
+    remove = superseded + stale_index
+    if remove and opts.mode == "overlay":
+        rep.warnings.append("delete from the installed game (overlay mode cannot remove files): "
+                            + ", ".join(remove) + ("  — the Ampr emulator was replaced, its index must be rebuilt"
+                                                   if stale_index else ""))
 
     outputs = {rel: (b, raw, b.writes) for rel, (b, raw) in working.items() if b.writes or rel in forced}
 
@@ -381,7 +407,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     if (game / pj_rel).is_file():
         raw_pj = (game / pj_rel).read_bytes()             # bytes: keep CRLF / BOM exactly
         bom = raw_pj.startswith(b"\xef\xbb\xbf")
-        new_text, changes = patch_param_json(raw_pj.decode("utf-8-sig"), opts.target)
+        new_text, changes = patch_param_json(raw_pj.decode("utf-8-sig"), opts.target, opts.target_minor)
         for key, old, new in changes:
             rep.edits.append(Edit(pj_rel, "param.json", -1, f"{key}={old}", new))
         if changes:
@@ -401,7 +427,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         for k, src in enumerate(files):
             prog("copy", k, len(files))
             rel = str(src.relative_to(game))
-            if rel in outputs or (rel == pj_rel and pj_new is not None) or rel.startswith("fakelib/"):
+            if rel in outputs or (rel == pj_rel and pj_new is not None) or rel in remove:
                 continue
             stats[clone_file(src, out / rel)] += 1
         log(f"cloned {stats['reflink']} file(s) by reflink, copied {stats['copy']}")
@@ -415,6 +441,15 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             if not bak.exists():
                 os.replace(dst, bak)
         b.save(dst)
+    if opts.mode == "inplace":
+        for rel in remove:
+            src = game / rel
+            bak = src.with_name(src.name + ".orig")
+            if src.exists() and not bak.exists():
+                os.replace(src, bak)
+                log(f"moved aside {rel} -> {bak.name}")
+    if remove and opts.mode != "overlay":
+        rep.edits += [Edit(rel, "removed", -1, "", "", "superseded / stale after Ampr replacement") for rel in remove]
     if pj_new is not None:
         dst = out / pj_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -425,7 +460,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         dst.write_bytes(pj_new)
 
     # 6. verify
-    ps5_target, _ = sdk.SDK_PAIRS[opts.target]
+    ps5_target, _ = sdk.target_pair(opts.target, opts.target_minor)
     problems = []
     for rel, (_, raw, allowed) in outputs.items():
         data = (out / rel).read_bytes()
@@ -470,11 +505,12 @@ class Plan:
 
 
 def plan(game: Path | str, target: int, db: EvidenceDB | None = None, patches: list[Path] | None = None,
-         progress: Callable[[str, int, int], None] | None = None) -> Plan:
+         progress: Callable[[str, int, int], None] | None = None,
+         replace_dump: dict[str, str | None] | None = None) -> Plan:
     from .rules import RuleContext, detect_all, file_loader
     game = Path(game).resolve()
     gs = scan_game(game, progress=(lambda i, n, name: progress("scan", i + 1, n)) if progress else None)
-    cov = coverage_analyze(gs, db, target) if db is not None and db.kits() else None
+    cov = coverage_analyze(gs, db, target, replace_dump) if db is not None and db.kits() else None
     findings = []
     if gs.eboot and not any(b.error for b in gs.binaries if b.role != "fakelib"):
         ctx = RuleContext(gs, cov, target, load=file_loader(game), edit=lambda *a, **k: None,

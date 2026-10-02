@@ -18,7 +18,7 @@ code moving between builds:
   "anchors": [{"name": "h", "find": "4c 8d ?? ?? e8 ?? ?? ?? ??", "offset": 4, "va": "0x4171867"}]
   `find` is hex with ?? wildcards and must match exactly once in the executable segments
   (the `va` hint is tried first); the anchor is the match + offset. Anywhere a VA is
-  accepted: "$h" = anchor, "orig:$h" = original rel32 target of the call/jmp at the anchor,
+  accepted: "$h" = anchor, "$h+0x3" = anchor + offset, "orig:$h" = original rel32 target of the call/jmp at the anchor,
   "riptgt:$h" = [rip+disp] address used by the instruction at the anchor.
 
 Cave code lines (runtime VAs; `@x` = cave/label, `nid:XXXX` = that import's PLT stub):
@@ -113,6 +113,15 @@ class Recipe:
             out[a["name"]] = {"va": va, "orig": orig, "rip": rip}
         return out
 
+    @staticmethod
+    def _va(v, anc: dict[str, dict]) -> int:
+        if isinstance(v, str) and v.startswith("$"):
+            name, _, add = v[1:].partition("+")
+            if name not in anc:
+                raise RecipeError(f"unknown anchor ${name}")
+            return anc[name]["va"] + (int(add, 0) if add else 0)
+        return _int(v)
+
     # ---- check -----------------------------------------------------------------------
     def check(self, b: Binary, title_id: str = "") -> str:
         """'' if applicable, else the reason it isn't."""
@@ -140,7 +149,11 @@ class Recipe:
                 return f"bytes at {va:#x} are {got.hex()}, expected {want.hex()}"
         for op in self.ops:
             if "old" in op:
-                va, old = _int(op["va"]), bytes.fromhex(op["old"])
+                try:
+                    va = self._va(op["va"], anc)
+                except RecipeError as e:
+                    return str(e)
+                old = bytes.fromhex(op["old"])
                 if b.read(va - base, len(old)) != old:
                     return f"bytes at {va:#x} differ from 'old'"
             elif "call" in op and "old_to" in op and not str(op["call"]).startswith("$"):
@@ -168,7 +181,7 @@ class Recipe:
 
         def target(t: str, a: Asm | None = None) -> int | str:
             if t.startswith("$"):
-                return anchor(t, "va")
+                return self._va(t, anc)
             if t.startswith("orig:"):
                 return anchor(t, "orig")
             if t.startswith("riptgt:"):
@@ -222,7 +235,7 @@ class Recipe:
                 off = b.patch(va - base, ins, new)
                 out.append((off, ins, new, f"{va:#x}: retarget -> {op['to']} ({t:#x})"))
             else:
-                va, old, new = _int(op["va"]), bytes.fromhex(op["old"]), bytes.fromhex(op["new"])
+                va, old, new = self._va(op["va"], anc), bytes.fromhex(op["old"]), bytes.fromhex(op["new"])
                 off = b.patch(va - base, old, new)
                 out.append((off, old, new, op.get("note", f"{va:#x}")))
         return out
