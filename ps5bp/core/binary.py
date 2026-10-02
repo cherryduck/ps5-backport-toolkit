@@ -78,6 +78,7 @@ class Binary:
     def __init__(self, data: bytes | bytearray, path: Path | str | None = None):
         self.data = bytearray(data)
         self.path = Path(path) if path else None
+        self.writes: list[tuple[int, int]] = []     # (file offset, length) of every modification
         magic = bytes(self.data[:4])
         if magic == ELF_MAGIC:
             self.kind = "elf"
@@ -171,11 +172,29 @@ class Binary:
         if have != old:
             raise ValueError(f"rva {rva:#x}: expected {old.hex()} found {have.hex()}")
         self.data[o:o + len(new)] = new
+        self.writes.append((o, len(new)))
         return o
+
+    def write_rva(self, rva: int, new: bytes) -> int:
+        """Overwrite bytes at rva without checking the old content (caller verified it)."""
+        return self.patch(rva, self.read(rva, len(new)), new)
 
     def write_phdr(self, p: Phdr) -> None:
         struct.pack_into(PHDR_FMT, self.data, self._phdr_pos(p.index),
                          p.type, p.flags, p.offset, p.vaddr, p.paddr, p.filesz, p.memsz, p.align)
+        self.writes.append((self._phdr_pos(p.index), 56))
+
+    def cave_rva(self, idx: int, align: int = 16) -> int:
+        """Where the next cave appended to segment idx would start (aligned)."""
+        p = self.phdrs[idx]
+        end = p.vaddr + p.filesz
+        return end + (-end) % align
+
+    def add_cave(self, idx: int, code: bytes, align: int = 16) -> int:
+        """Append code to segment idx at cave_rva(idx, align), zero-padding the gap."""
+        p = self.phdrs[idx]
+        pad = self.cave_rva(idx, align) - (p.vaddr + p.filesz)
+        return self.grow(idx, b"\0" * pad + code) + pad
 
     def slack(self, idx: int) -> int:
         """Zero bytes that can be appended to LOAD segment idx without overlapping anything."""
@@ -204,12 +223,14 @@ class Binary:
         off, size = self._seg[idx]
         cave = p.vaddr + p.filesz
         self.data[off + size:off + size + len(code)] = code
+        self.writes.append((off + size, len(code)))
         if self.kind == "self":
             for k, e in enumerate(self.entries):
                 if e[0] & PROPS_HAS_BLOCKS and (e[0] >> 20) & 0xFFF == idx:
                     e[2] += len(code)
                     e[3] = max(e[3], e[2])
                     struct.pack_into(ENTRY_FMT, self.data, 0x20 + k * 0x20, *e)
+                    self.writes.append((0x20 + k * 0x20, 0x20))
         p.filesz += len(code)
         p.memsz = max(p.memsz, p.filesz)
         self.write_phdr(p)

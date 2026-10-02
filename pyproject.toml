@@ -21,7 +21,7 @@ ps5bp = "ps5bp.cli:main"
 include = ["ps5bp*"]
 
 [tool.setuptools.package-data]
-ps5bp = ["data/*"]
+ps5bp = ["data/*", "data/recipes/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

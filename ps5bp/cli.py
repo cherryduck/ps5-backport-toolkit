@@ -116,7 +116,8 @@ def cmd_build(a) -> int:
     from .core.pipeline import BuildError, BuildOptions, build
     opts = BuildOptions(target=a.target, mode=a.mode, out=Path(a.out) if a.out else None,
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
-                        strict=a.strict, dry_run=a.dry_run)
+                        strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
+                        patches=[Path(x) for x in a.patch])
     db = EvidenceDB() if not a.no_fakelibs else None
     try:
         rep = build(Path(a.game), opts, db, log=lambda m: print(f"[ps5bp] {m}", file=sys.stderr))
@@ -124,6 +125,20 @@ def cmd_build(a) -> int:
         print(f"build failed: {e}", file=sys.stderr)
         return 1
     print(rep.to_text(), end="")
+    return 0
+
+
+def cmd_rules(a) -> int:
+    from .core.recipe import builtin
+    from .core.rules import registry
+    for r in registry().values():
+        print(f"{r.name:12} {'on ' if r.default else 'off'}  {r.summary}"
+              + (f"  [conflicts: {', '.join(r.conflicts)}]" if r.conflicts else ""))
+    rs = builtin()
+    if rs:
+        print("\nbuilt-in recipes:")
+        for r in rs:
+            print(f"  {r.rule:12} {r.title_id or '*':10} {r.name}")
     return 0
 
 
@@ -168,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
     bd.add_argument("--force", action="store_true", help="accept an input that already has fakelib/")
     bd.add_argument("--strict", action="store_true", help="fail on absent/missing/partial coverage")
     bd.add_argument("--dry-run", action="store_true", help="plan only, write nothing")
+    bd.add_argument("--rule", action="append", default=[], metavar="NAME",
+                    help="enable a fix rule (repeatable; see `ps5bp rules`)")
+    bd.add_argument("--no-rule", action="append", default=[], metavar="NAME", help="disable a fix rule")
+    bd.add_argument("--patch", action="append", default=[], metavar="FILE", help="apply a patch recipe (JSON)")
+    rl = sub.add_parser("rules", help="list fix rules")
+    rl.set_defaults(func=cmd_rules)
     bd.set_defaults(func=cmd_build)
     kit = sub.add_parser("kit", help="manage the fakelib kit library / evidence DB")
     ks = kit.add_subparsers(dest="kit_cmd", required=True)

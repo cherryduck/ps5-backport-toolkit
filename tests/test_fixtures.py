@@ -82,3 +82,15 @@ def test_build_psviethoa_fw6_to_fw4(kitdb, tmp_path):
     a, b = (src / "sce_sys/param.json").read_bytes(), (out / "sce_sys/param.json").read_bytes()
     assert len(a) == len(b) and sum(x != y for x, y in zip(a, b)) == 2
     assert {f["kit"] for f in rep.fakelibs} == {"dlps-11386"}
+
+
+def test_wolverine_pssr_recipe_reproduces_dlps(kitdb, tmp_path):
+    """Reconstructed pre-DLPS Wolverine eboot + pssr-memory rule == DLPS FW4 eboot, byte for byte."""
+    from ps5bp.core.pipeline import BuildOptions, build
+    src = ROOT / "wolverine-orig-synth"
+    if not (src / "eboot.bin").is_file():
+        pytest.skip("wolverine-orig-synth not present")
+    out = tmp_path / "out"
+    rep = build(src, BuildOptions(target=4, out=out, rules={"pssr-memory"}), kitdb, log=lambda m: None)
+    assert rep.ok and any(f["applied"] for f in rep.findings if f["rule"] == "pssr-memory")
+    assert (out / "eboot.bin").read_bytes() == (ROOT / "wolverine-dlps" / "eboot.bin").read_bytes()
