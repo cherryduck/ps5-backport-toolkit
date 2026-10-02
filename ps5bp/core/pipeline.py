@@ -68,6 +68,9 @@ class BuildOptions:
     rules: set[str] = field(default_factory=set)       # opt-in rules (--rule)
     no_rules: set[str] = field(default_factory=set)    # disabled rules (--no-rule)
     patches: list[Path] = field(default_factory=list)  # user recipe files (--patch)
+    memfix: list[str] = field(default_factory=list)    # generated memory fixes (SITE:VARIANT[:AMOUNT])
+    klog: Path | None = None                           # crash log steering memfix caller choice
+    klog_text: str | None = None                       # same, as text (GUI)
 
 
 @dataclass
@@ -85,6 +88,7 @@ class BuildReport:
     verified: list[str] = field(default_factory=list)
     coverage: dict = field(default_factory=dict)
     findings: list[dict] = field(default_factory=list)
+    memfix_trial: int | None = None
     ok: bool = False
 
     def to_json(self) -> str:
@@ -111,6 +115,9 @@ class BuildReport:
             L += ["", "fakelibs:"] + [f"   {x['file']}  from {x['kit']} (FW{x['kit_fw']})" for x in self.fakelibs]
         if self.warnings:
             L += ["", "warnings:"] + [f"   {w}" for w in self.warnings]
+        if self.memfix_trial is not None:
+            L += ["", f"memfix trial {self.memfix_trial}: test on the console, then "
+                  f"`ps5bp memfix GAME --result {self.memfix_trial} works|crash [--klog new.txt]`"]
         L += ["", f"verified {len(self.verified)} binaries"]
         return "\n".join(L) + "\n"
 
@@ -299,9 +306,30 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         prog("binaries", k, len(todo))
         process(bi.path, game / bi.path)
 
+    # 3a. generated memory fix -> a recipe file applied like --patch, recorded as a trial
+    patches = [Path(x) for x in opts.patches]
+    trial = None
+    if opts.memfix:
+        from . import memfix
+        kt = opts.klog_text or (Path(opts.klog).read_text(errors="replace") if opts.klog else None)
+        log(f"memfix: analysing allocation sites for {', '.join(opts.memfix)}")
+        try:
+            rec = memfix.generate(game, opts.memfix, gs.title_id, kt)
+        except memfix.MemfixError as e:
+            raise BuildError(f"memfix: {e}") from None
+        if opts.dry_run:
+            import tempfile
+            tp = Path(tempfile.mkdtemp(prefix="ps5bp-memfix-")) / "memfix-recipe.json"
+            tp.write_text(json.dumps(rec, indent=1))
+            patches.append(tp)
+        else:
+            trial, tpath = memfix.new_trial(gs.title_id, rec, game, opts.target)
+            patches.append(memfix.recipe_file(tpath))
+            rep.memfix_trial = trial
+
     # 3b. fix rules
     from .rules import RuleContext, detect_all, resolve
-    enabled = set(opts.rules) | ({"user-patch"} if opts.patches else set())
+    enabled = set(opts.rules) | ({"user-patch"} if patches else set())
     try:
         active = {r.name: r for r in resolve(enabled, set(opts.no_rules))}
     except ValueError as e:
@@ -309,7 +337,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     ctx = RuleContext(gs, cov, opts.target, load=lambda rel: get(rel, game / rel),
                       edit=lambda file, kind, off, old, new, note="": rep.edits.append(
                           Edit(file, kind, off, old, new, note)),
-                      options={"patches": [Path(x) for x in opts.patches]})
+                      options={"patches": patches})
     for f in detect_all(ctx):
         applied = False
         if f.rule in active:
@@ -421,6 +449,10 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             problems.append(f"{pj_rel}: invalid JSON after edit: {e}")
     rep.warnings += problems
     rep.ok = not problems
+    if trial is not None:
+        from . import memfix
+        (out / "memfix-recipe.json").write_text(json.dumps(rec, indent=1))
+        memfix.update_trial(gs.title_id, trial, out=str(out), ok=not problems)
     (out / "backport-report.json").write_text(rep.to_json())
     (out / "backport-report.txt").write_text(rep.to_text())
     if problems:

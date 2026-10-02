@@ -90,3 +90,19 @@ class KitWorker(QThread):
         finally:
             if db:
                 db.close()
+
+
+class FuncWorker(QThread):
+    """Run fn(*args) off the UI thread (memfix site scan)."""
+    done = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, fn, *args):
+        super().__init__()
+        self.fn, self.args = fn, args
+
+    def run(self) -> None:
+        try:
+            self.done.emit(self.fn(*self.args))
+        except Exception as e:                                   # noqa: BLE001
+            self.error.emit(f"{e}\n\n{traceback.format_exc()}")

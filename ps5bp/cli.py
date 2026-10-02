@@ -117,7 +117,8 @@ def cmd_build(a) -> int:
     opts = BuildOptions(target=a.target, mode=a.mode, out=Path(a.out) if a.out else None,
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
                         strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
-                        patches=[Path(x) for x in a.patch])
+                        patches=[Path(x) for x in a.patch], memfix=list(a.memfix),
+                        klog=Path(a.klog) if a.klog else None)
     db = EvidenceDB() if not a.no_fakelibs else None
     try:
         rep = build(Path(a.game), opts, db, log=lambda m: print(f"[ps5bp] {m}", file=sys.stderr))
@@ -139,6 +140,54 @@ def cmd_klog(a) -> int:
     klog.diagnose(t, flags)
     print(t.to_text(), end="")
     return 0 if t.crashes else 3
+
+
+def cmd_memfix(a) -> int:
+    from .core import memfix
+    game = Path(a.game)
+    gs = scan_game(game)
+    tid = gs.title_id
+    kt = Path(a.klog).read_text(errors="replace") if a.klog else None
+    if a.result is not None:
+        if a.outcome not in ("works", "crash"):
+            print("give the outcome: --result N works|crash", file=sys.stderr)
+            return 2
+        for line in memfix.record_result(game, tid, a.result, a.outcome == "works", kt):
+            print(line)
+        return 0
+    if a.trials:
+        for t in memfix.list_trials(tid):
+            print(f"#{t['id']:<3} {t['time']}  FW{t['target']}  {t.get('result') or 'untested':8}  "
+                  f"{' '.join(t['choices'])}  -> {t.get('out')}")
+        return 0
+    sc, sites = memfix.scan(game, a.file, kt)
+    if kt and not memfix.crash_frames(kt, a.file):
+        print(f"note: the log has no crash frames inside {a.file}", file=sys.stderr)
+    shown = sites if a.all else [s for s in sites if s.score > 0] or sites
+    print(f"{len(sites)} allocation site(s) in {a.file}" + ("" if a.all else f", {len(shown)} shown (--all for every one)"))
+    for n, s in enumerate(shown, 1):
+        flags = [x for x, on in (("CRASH PATH", s.on_crash_path), ("fatal", s.fatal)) if on]
+        print(f"\n#{n} {s.id}  {s.api}  in fn {s.fn:#x}  score {s.score}" + (f"  [{', '.join(flags)}]" if flags else ""))
+        if s.crash_callers:
+            print("   crash-path caller(s): " + ", ".join(f"{c:#x}" for c in s.crash_callers))
+        print(f"   length ({s.len_reg}): " + " ; ".join(s.len_desc[-4:]))
+        print(f"   on failure: {s.fail_desc}")
+        if s.hook is not None:
+            print(f"   shrink hook {s.hook:#x} on {s.hook_reg}: {'safe' if s.shrink_safe else 'UNSAFE'} — {s.shrink_why}")
+        else:
+            print(f"   shrink: n/a — {s.shrink_why}")
+        if s.page_split:
+            ps = s.page_split
+            print(f"   page-split: out={ps['out']} page={ps['page']} count={ps['count']} memtype={ps['memtype']}")
+        vs = []
+        for v in s.variants():
+            if v == "shrink":
+                vs += [f"{s.id}:shrink:{memfix.fmt_amount(x)}" for x in memfix.AMOUNTS]
+            else:
+                vs.append(f"{s.id}:{v}")
+        print("   try: " + ("  ".join(vs) if vs else "(nothing safe)"))
+    print("\nbuild a trial:  ps5bp build GAME --target N --out OUT --memfix SITE:VARIANT[:AMOUNT] [--klog LOG]")
+    return 0
 
 
 def cmd_rules(a) -> int:
@@ -200,6 +249,18 @@ def main(argv: list[str] | None = None) -> int:
                     help="enable a fix rule (repeatable; see `ps5bp rules`)")
     bd.add_argument("--no-rule", action="append", default=[], metavar="NAME", help="disable a fix rule")
     bd.add_argument("--patch", action="append", default=[], metavar="FILE", help="apply a patch recipe (JSON)")
+    bd.add_argument("--memfix", action="append", default=[], metavar="SITE:VARIANT[:AMOUNT]",
+                    help="generated memory fix (see `ps5bp memfix GAME`); records a trial")
+    bd.add_argument("--klog", help="crash log: page-split hooks only the callers on its crash path")
+    mf = sub.add_parser("memfix", help="find failing memory allocations, generate fixes, track console trials")
+    mf.add_argument("game")
+    mf.add_argument("--klog", help="crash log: ranks sites on the crash path first")
+    mf.add_argument("--file", default="eboot.bin")
+    mf.add_argument("--all", action="store_true", help="list every allocation site")
+    mf.add_argument("--trials", action="store_true", help="list recorded trials for this title")
+    mf.add_argument("--result", type=int, metavar="N", help="record the console result of trial N")
+    mf.add_argument("outcome", nargs="?", help="works | crash (with --result)")
+    mf.set_defaults(func=cmd_memfix)
     kl = sub.add_parser("klog", help="triage a crash log (klog)")
     kl.add_argument("log", help="klog text file, or - for stdin")
     kl.add_argument("--game", help="game folder the log is from (resolves backtrace calls)")

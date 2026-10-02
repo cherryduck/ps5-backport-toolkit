@@ -13,6 +13,14 @@
             {"va": "0x3ddc5d3", "old": "75", "new": "eb"}]
 }
 
+Anchors (optional) locate code by signature instead of fixed VA, so a recipe survives
+code moving between builds:
+  "anchors": [{"name": "h", "find": "4c 8d ?? ?? e8 ?? ?? ?? ??", "offset": 4, "va": "0x4171867"}]
+  `find` is hex with ?? wildcards and must match exactly once in the executable segments
+  (the `va` hint is tried first); the anchor is the match + offset. Anywhere a VA is
+  accepted: "$h" = anchor, "orig:$h" = original rel32 target of the call/jmp at the anchor,
+  "riptgt:$h" = [rip+disp] address used by the instruction at the anchor.
+
 Cave code lines (runtime VAs; `@x` = cave/label, `nid:XXXX` = that import's PLT stub):
   "<hex>"                         raw bytes
   "label NAME"                    define a label
@@ -54,6 +62,7 @@ class Recipe:
     match: list = field(default_factory=list)
     caves: list = field(default_factory=list)
     ops: list = field(default_factory=list)
+    anchors: list = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | str, text: str | None = None) -> "Recipe":
@@ -63,16 +72,63 @@ class Recipe:
                 raise RecipeError(f"{path}: missing '{k}'")
         return cls(d["name"], d["file"], d, d.get("rule", "user-patch"), d.get("title_id", ""),
                    _int(d["base"]) if "base" in d else None, d.get("note", ""), str(path),
-                   d.get("match", []), d.get("caves", []), d.get("ops", []))
+                   d.get("match", []), d.get("caves", []), d.get("ops", []), d.get("anchors", []))
 
     def base_for(self) -> int:
         return self.base if self.base is not None else (0x400000 if self.file == "eboot.bin" else 0)
+
+    # ---- anchors ---------------------------------------------------------------------
+    def resolve(self, b: Binary) -> dict[str, dict]:
+        """name -> {va, orig, rip} for every anchor; raises RecipeError if one doesn't match once."""
+        from .memfix import _regex, find_all
+        base = self.base_for()
+        out: dict[str, dict] = {}
+        for a in self.anchors:
+            off = int(a.get("offset", 0))
+            va = None
+            if "va" in a:
+                hint = _int(a["va"]) - off
+                n = len(a["find"].split())
+                try:
+                    blob = b.read(hint - base, n)
+                except Exception:                    # noqa: BLE001
+                    blob = b""
+                if _regex(a["find"]).fullmatch(blob):
+                    va = hint + off
+            if va is None:
+                hits = find_all(b, a["find"], base, 2)
+                if len(hits) != 1:
+                    raise RecipeError(f"anchor {a['name']}: signature found {len(hits)}x" +
+                                      (" (ambiguous)" if hits else " (code not present: other version?)"))
+                va = hits[0] + off
+            ins = b.read(va - base, 16)
+            orig = None
+            if ins[0] in (0xE8, 0xE9):
+                orig = va + 5 + struct.unpack_from("<i", ins, 1)[0]
+            rip = None
+            from .x86flow import decode
+            dec = decode(ins, va)
+            if dec and dec[0].rip_target is not None:
+                rip = dec[0].rip_target
+            out[a["name"]] = {"va": va, "orig": orig, "rip": rip}
+        return out
 
     # ---- check -----------------------------------------------------------------------
     def check(self, b: Binary, title_id: str = "") -> str:
         """'' if applicable, else the reason it isn't."""
         if self.title_id and title_id and self.title_id != title_id:
             return f"title {title_id} != {self.title_id}"
+        try:
+            anc = self.resolve(b)
+        except RecipeError as e:
+            return str(e)
+        for op in self.ops:
+            if "call" in op and str(op["call"]).startswith("$"):
+                a = anc.get(op["call"][1:])
+                if a is None:
+                    return f"unknown anchor {op['call']}"
+                if a["orig"] is None:
+                    return f"anchor {op['call']} at {a['va']:#x} is not a call/jmp"
         base = self.base_for()
         for m in self.match:
             va, want = _int(m["va"]), bytes.fromhex(m["bytes"])
@@ -87,7 +143,7 @@ class Recipe:
                 va, old = _int(op["va"]), bytes.fromhex(op["old"])
                 if b.read(va - base, len(old)) != old:
                     return f"bytes at {va:#x} differ from 'old'"
-            elif "call" in op and "old_to" in op:
+            elif "call" in op and "old_to" in op and not str(op["call"]).startswith("$"):
                 va = _int(op["call"])
                 ins = b.read(va - base, 5)
                 if ins[0] not in (0xE8, 0xE9) or va + 5 + struct.unpack("<i", ins[1:])[0] != _int(op["old_to"]):
@@ -102,8 +158,21 @@ class Recipe:
         d = dynamic.parse(b)
         stubs = plt_stubs(b, d, base) if d else {}
         labels: dict[str, int] = {}
+        anc = self.resolve(b)
+
+        def anchor(t: str, key: str) -> int:
+            name = t.split("$", 1)[1]
+            if name not in anc or anc[name][key] is None:
+                raise RecipeError(f"{self.name}: {t} unresolved")
+            return anc[name][key]
 
         def target(t: str, a: Asm | None = None) -> int | str:
+            if t.startswith("$"):
+                return anchor(t, "va")
+            if t.startswith("orig:"):
+                return anchor(t, "orig")
+            if t.startswith("riptgt:"):
+                return anchor(t, "rip")
             if t.startswith("@"):
                 name = t[1:]
                 if a is not None and name not in labels:
@@ -146,7 +215,7 @@ class Recipe:
 
         for op in self.ops:
             if "call" in op:
-                va = _int(op["call"])
+                va = int(target(op["call"])) if str(op["call"]).startswith("$") else _int(op["call"])
                 ins = b.read(va - base, 5)
                 t = int(target(op["to"]))
                 new = ins[:1] + struct.pack("<i", t - (va + 5))

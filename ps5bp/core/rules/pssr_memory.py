@@ -2,11 +2,13 @@
 
 Game-specific: the patch sites differ per title/version, so this rule offers the
 built-in recipes in ps5bp/data/recipes whose title and byte signatures match.
+Also offers recipes confirmed with `ps5bp memfix --result N works`
+(~/.local/share/ps5bp/recipes/); the first applicable recipe per file wins (user recipes before built-ins).
 Off by default (changes game code, not just imports); conflicts with pro-disable.
 """
 from __future__ import annotations
 
-from ..recipe import builtin
+from ..recipe import Recipe, builtin
 from . import Finding, Rule, RuleContext
 
 
@@ -16,8 +18,22 @@ class PssrMemory(Rule):
     conflicts = ("pro-disable",)
 
     def detect(self, ctx: RuleContext) -> list[Finding]:
+        from ..memfix import user_recipes_dir
         out = []
-        for r in builtin(self.name):
+        user = []
+        d = user_recipes_dir()
+        if d.is_dir():
+            for f in sorted(d.glob("*.json")):
+                try:
+                    r = Recipe.load(f)
+                except Exception:                    # noqa: BLE001 — skip a broken user file
+                    continue
+                if r.rule == self.name:
+                    user.append(r)
+        taken: set[str] = set()                  # files already covered by an applicable recipe
+        for r in user + builtin(self.name):
+            if r.file in taken:
+                continue
             if r.title_id and ctx.gs.title_id and r.title_id != ctx.gs.title_id:
                 continue
             if not any(b.path == r.file and not b.error for b in ctx.gs.binaries):
@@ -25,6 +41,8 @@ class PssrMemory(Rule):
             why = r.check(ctx.load(r.file), ctx.gs.title_id)
             if why and not (r.title_id and r.title_id == ctx.gs.title_id):
                 continue                 # unknown title and no signature match: not this game
+            if not why:
+                taken.add(r.file)
             out.append(Finding(self.name, r.file, f"recipe {r.name}", applicable=not why,
                                recommended=not why, reason=why or r.note, data={"recipe": r}))
         return out

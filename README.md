@@ -95,6 +95,37 @@ already-patched file), code caves appended to a segment (hex + `rel32`/`rel8`/`r
 fixups; `nid:XXXX` = an import's PLT stub, `@label` = cave label), call retargets with
 their expected old targets, and plain old->new byte edits.
 
+## Memory fixes (`memfix`)
+
+For games that exit on a failed startup allocation (typical for Pro/PSSR titles on low FW),
+`memfix` finds the allocation, generates a fix and keeps track of what you tried on the console.
+
+```
+ps5bp memfix GAME --klog crash.txt                 # ranked allocation sites, crash path first
+ps5bp build GAME --target 4 --out OUT --memfix 3d77bbc:page-split --memfix 4171888:shrink:128M --klog crash.txt
+# install OUT, boot it ...
+ps5bp memfix GAME --result 1 works                 # saved as a recipe; pssr-memory offers it from now on
+ps5bp memfix GAME --result 1 crash --klog new.txt  # did the failure move? suggests the next step
+ps5bp memfix GAME --trials
+```
+
+For each direct-memory allocation (known APIs, plus library wrappers recognised by taking
+`sceKernelGetDirectMemorySize` as their search end) the scan traces how the length was
+computed, whether failure is fatal, and which fixes apply:
+
+| fix | what the generated cave does | offered when |
+|---|---|---|
+| `shrink[:AMOUNT]` | at the first call after the length is computed, requests >= 2 x AMOUNT lose AMOUNT (128M/256M/512M) | the length sits in a callee-saved register and no other copy of its inputs is used afterwards (otherwise the game would assume the original size: marked unsafe) |
+| `page-split` | the allocation becomes a loop of 2 MB direct-memory pages filling the game's page array; other page sizes fall through to the original | the function has the page-array shape (len = count x page, one address stored per page). With a klog only the callers on the crash path are hooked |
+| `retry-align` | if the allocation fails, retry once with 64 KB alignment (same size) | AllocateDirectMemory-style calls |
+
+Generated recipes locate their patch points by wildcarded byte signatures rather than fixed
+addresses, so a confirmed fix can carry over to another build of the game. Whether a fix
+is *right* is only known from a console boot — the tool records trials, it does not
+claim success. On the Wolverine 11.60 crash log, `shrink:128M` on the Ampr pool plus
+`page-split` on the PSSR allocator (picked from the backtrace) regenerates DLPS's FW4 eboot
+byte for byte.
+
 ## Crash-log triage
 
 ```

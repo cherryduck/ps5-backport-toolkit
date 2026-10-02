@@ -15,7 +15,7 @@ from ..core import sdk
 from ..core.evidence import EvidenceDB, home
 from ..core.pipeline import MODES, BuildOptions
 from ..core.rules import registry
-from .workers import AnalyzeWorker, BuildWorker, KitWorker
+from .workers import AnalyzeWorker, BuildWorker, FuncWorker, KitWorker
 
 STATUS_COLOR = {"game": "#5a9", "system": "#5a9", "fakelib": "#49c", "partial": "#c93",
                 "unverified": "#888", "absent": "#d55", "missing": "#d55"}
@@ -55,6 +55,8 @@ class MainWindow(QMainWindow):
         self.kit_worker = None
         self.patches: list[Path] = []
         self.rule_boxes: dict[str, QCheckBox] = {}
+        self.mf_sites: list = []
+        self.mf_worker = None
 
         root = QWidget()
         v = QVBoxLayout(root)
@@ -65,6 +67,7 @@ class MainWindow(QMainWindow):
         self.game_edit = QLineEdit(self.settings.value("game", ""))
         self.game_edit.setPlaceholderText("decrypted game dump (contains eboot.bin, sce_sys/, sce_module/)")
         self.game_edit.textChanged.connect(self._invalidate)
+        self.game_edit.textChanged.connect(self._mf_clear)
         row.addWidget(self.game_edit, 1)
         b = QPushButton("Browse…")
         b.clicked.connect(self._browse_game)
@@ -166,6 +169,58 @@ class MainWindow(QMainWindow):
         cs.setSizes([200, 400])
         cv.addWidget(cs, 1)
         self.tabs.addTab(cw, "Crash log")
+        # memory fix
+        mw = QWidget()
+        mv = QVBoxLayout(mw)
+        mr = QHBoxLayout()
+        mr.addWidget(QLabel("For games that exit on a failed startup allocation. A crash log in the "
+                            "Crash log tab ranks the failing site first."))
+        mr.addStretch(1)
+        self.mf_scan_btn = QPushButton("Find allocation sites")
+        self.mf_scan_btn.clicked.connect(self._mf_scan)
+        mr.addWidget(self.mf_scan_btn)
+        mv.addLayout(mr)
+        self.mf_table = table(["#", "site", "API", "function", "flags", "length", "shrink", "fixes"])
+        self.mf_table.itemSelectionChanged.connect(self._mf_selected)
+        mv.addWidget(self.mf_table, 1)
+        ar = QHBoxLayout()
+        ar.addWidget(QLabel("Fix:"))
+        self.mf_variant = QComboBox()
+        ar.addWidget(self.mf_variant)
+        self.mf_amount = QComboBox()
+        for a in ("128M", "256M", "512M"):
+            self.mf_amount.addItem(a)
+        ar.addWidget(QLabel("cut:"))
+        ar.addWidget(self.mf_amount)
+        b = QPushButton("Add to build")
+        b.clicked.connect(self._mf_add)
+        ar.addWidget(b)
+        b = QPushButton("Remove")
+        b.clicked.connect(self._mf_remove)
+        ar.addWidget(b)
+        ar.addStretch(1)
+        mv.addLayout(ar)
+        self.mf_list = QListWidget()
+        self.mf_list.setMaximumHeight(80)
+        mv.addWidget(QLabel("Applied by the next Build backport and recorded as a trial:"))
+        mv.addWidget(self.mf_list)
+        tr = QHBoxLayout()
+        tr.addWidget(QLabel("Trials:"))
+        self.mf_trials = QComboBox()
+        tr.addWidget(self.mf_trials, 1)
+        b = QPushButton("It boots")
+        b.clicked.connect(lambda: self._mf_result(True))
+        tr.addWidget(b)
+        b = QPushButton("It crashed (uses the Crash log text)")
+        b.clicked.connect(lambda: self._mf_result(False))
+        tr.addWidget(b)
+        mv.addLayout(tr)
+        self.mf_out = QPlainTextEdit()
+        self.mf_out.setReadOnly(True)
+        self.mf_out.setFont(QFont("monospace"))
+        self.mf_out.setMaximumHeight(150)
+        mv.addWidget(self.mf_out)
+        self.tabs.addTab(mw, "Memory fix")
         # log
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -394,7 +449,9 @@ class MainWindow(QMainWindow):
         return BuildOptions(target=self.target.currentData(), mode=mode,
                             out=None if mode == "inplace" else Path(self.out_edit.text()).expanduser(),
                             force=self.force.isChecked(), rules=self.selected_rules(),
-                            patches=list(self.patches) if self.rule_boxes["user-patch"].isChecked() else [])
+                            patches=list(self.patches) if self.rule_boxes["user-patch"].isChecked() else [],
+                            memfix=self.memfix_choices(),
+                            klog_text=self.klog_in.toPlainText() or None)
 
     def _build(self, confirm: bool = True) -> None:
         if self.plan is None:
@@ -412,7 +469,8 @@ class MainWindow(QMainWindow):
         game = Path(self.plan.scan.root)
         self.say(f"building {game} -> FW {opts.target}.xx, {opts.mode}"
                  + (f", rules: {', '.join(sorted(opts.rules))}" if opts.rules else "")
-                 + (f", {len(opts.patches)} patch file(s)" if opts.patches else ""))
+                 + (f", {len(opts.patches)} patch file(s)" if opts.patches else "")
+                 + (f", memfix: {' '.join(opts.memfix)}" if opts.memfix else ""))
         self.busy(True)
         self.worker = BuildWorker(game, opts)
         self.worker.log.connect(self.say)
@@ -432,6 +490,8 @@ class MainWindow(QMainWindow):
         self._release()
         self.busy(False)
         self.last_report = rep
+        if rep.memfix_trial is not None:
+            self._mf_refresh_trials()
         self.say(rep.to_text())
         self.tabs.setCurrentWidget(self.log)
         box = QMessageBox(self)
@@ -462,6 +522,109 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.log)
         if not getattr(self, "_headless", False):
             QMessageBox.critical(self, "Build failed", msg.split("\n\n")[0])
+
+    # ---- memory fix ------------------------------------------------------------------------
+    def _mf_clear(self, *_) -> None:
+        """Site ids belong to one eboot: forget them when the game folder changes."""
+        if hasattr(self, "mf_list"):
+            self.mf_sites = []
+            self.mf_table.setRowCount(0)
+            self.mf_list.clear()
+            self.mf_trials.clear()
+
+    def memfix_choices(self) -> list[str]:
+        return [self.mf_list.item(k).text() for k in range(self.mf_list.count())]
+
+    def _mf_title(self) -> str:
+        return self.plan.scan.title_id if self.plan else ""
+
+    def _mf_scan(self) -> None:
+        from ..core import memfix
+        game = Path(self.game_edit.text()).expanduser()
+        if not (game / "eboot.bin").is_file():
+            QMessageBox.warning(self, "Memory fix", "Choose a game folder with an eboot.bin first.")
+            return
+        self.mf_scan_btn.setEnabled(False)
+        self.say(f"memfix: scanning allocation sites in {game / 'eboot.bin'}")
+        self.mf_worker = FuncWorker(lambda g, k: memfix.scan(g, "eboot.bin", k)[1], game,
+                                    self.klog_in.toPlainText() or None)
+        self.mf_worker.done.connect(self._mf_scanned)
+        self.mf_worker.error.connect(self._mf_error)
+        self.mf_worker.start()
+
+    @pyqtSlot(object)
+    def _mf_scanned(self, sites) -> None:
+        self._release("mf_worker")
+        self.mf_scan_btn.setEnabled(True)
+        self.mf_sites = sites
+        rows, colors = [], {}
+        for n, s in enumerate(sites):
+            flags = ", ".join(x for x, on in (("CRASH PATH", s.on_crash_path), ("fatal", s.fatal)) if on)
+            shrink = ("safe" if s.shrink_safe else "unsafe") if s.hook is not None else "n/a"
+            rows.append([n + 1, s.id, s.api, f"{s.fn:#x}", flags, " ; ".join(s.len_desc[-2:]), shrink,
+                         ", ".join(s.variants())])
+            if s.on_crash_path:
+                colors[n] = "#d55"
+        fill(self.mf_table, rows, colors)
+        self.say(f"memfix: {len(sites)} allocation site(s)")
+        if sites:
+            self.mf_table.selectRow(0)
+        self._mf_refresh_trials()
+
+    @pyqtSlot(str)
+    def _mf_error(self, msg: str) -> None:
+        self._release("mf_worker")
+        self.mf_scan_btn.setEnabled(True)
+        self.say(f"memfix scan failed: {msg}")
+
+    def _mf_selected(self) -> None:
+        r = self.mf_table.currentRow()
+        self.mf_variant.clear()
+        if 0 <= r < len(self.mf_sites):
+            s = self.mf_sites[r]
+            for v in s.variants():
+                self.mf_variant.addItem(v)
+            self.mf_out.setPlainText("\n".join([f"site {s.id}  {s.api}  in fn {s.fn:#x}",
+                                                f"length ({s.len_reg}):"] + [f"   {d}" for d in s.len_desc]
+                                               + [f"on failure: {s.fail_desc}",
+                                                  f"shrink: {s.shrink_why}" + (f" (hook {s.hook:#x})" if s.hook else "")]
+                                               + ([f"crash-path callers: {', '.join(f'{c:#x}' for c in s.crash_callers)}"]
+                                                  if s.crash_callers else [])))
+
+    def _mf_add(self) -> None:
+        r = self.mf_table.currentRow()
+        if not 0 <= r < len(self.mf_sites) or not self.mf_variant.currentText():
+            return
+        v = self.mf_variant.currentText()
+        c = f"{self.mf_sites[r].id}:{v}" + (f":{self.mf_amount.currentText()}" if v == "shrink" else "")
+        if c not in self.memfix_choices():
+            self.mf_list.addItem(c)
+
+    def _mf_remove(self) -> None:
+        for it in self.mf_list.selectedItems():
+            self.mf_list.takeItem(self.mf_list.row(it))
+
+    def _mf_refresh_trials(self) -> None:
+        from ..core import memfix
+        self.mf_trials.clear()
+        for t in reversed(memfix.list_trials(self._mf_title())):
+            self.mf_trials.addItem(f"#{t['id']}  {t['time']}  FW{t['target']}  {t.get('result') or 'untested'}  "
+                                   f"{' '.join(t['choices'])}", t["id"])
+
+    def _mf_result(self, works: bool) -> None:
+        from ..core import memfix
+        n = self.mf_trials.currentData()
+        if n is None:
+            return
+        game = Path(self.game_edit.text()).expanduser()
+        try:
+            msgs = memfix.record_result(game, self._mf_title(), n, works,
+                                        None if works else (self.klog_in.toPlainText() or None))
+        except Exception as e:                           # noqa: BLE001
+            msgs = [f"failed: {e}"]
+        self.mf_out.setPlainText("\n".join(msgs))
+        self.say("memfix: " + " / ".join(msgs))
+        self._mf_refresh_trials()
 
     # ---- crash log -------------------------------------------------------------------------
     def _load_klog(self) -> None:
