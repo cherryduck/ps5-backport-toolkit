@@ -187,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="enable a fix rule (repeatable; see `ps5bp rules`)")
     bd.add_argument("--no-rule", action="append", default=[], metavar="NAME", help="disable a fix rule")
     bd.add_argument("--patch", action="append", default=[], metavar="FILE", help="apply a patch recipe (JSON)")
+    gu = sub.add_parser("gui", help="open the graphical interface")
+    gu.set_defaults(func=lambda a: __import__("ps5bp.gui", fromlist=["main"]).main())
     rl = sub.add_parser("rules", help="list fix rules")
     rl.set_defaults(func=cmd_rules)
     bd.set_defaults(func=cmd_build)

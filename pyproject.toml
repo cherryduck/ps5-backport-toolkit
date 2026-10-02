@@ -16,6 +16,7 @@ dev = ["pytest"]
 
 [project.scripts]
 ps5bp = "ps5bp.cli:main"
+ps5bp-gui = "ps5bp.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["ps5bp*"]

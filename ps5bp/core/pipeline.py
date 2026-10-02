@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from dataclasses import asdict, dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -37,6 +38,10 @@ FICLONE = 0x40049409
 
 
 class BuildError(Exception):
+    pass
+
+
+class BuildCancelled(BuildError):
     pass
 
 
@@ -213,8 +218,19 @@ def changed_ranges_ok(orig: bytes, new: bytes, allowed: list[tuple[int, int]]) -
 
 # ---- pipeline ----------------------------------------------------------------------
 def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
-          log: Callable[[str], None] = print) -> BuildReport:
+          log: Callable[[str], None] = print, cancel: "threading.Event | None" = None,
+          progress: Callable[[str, int, int], None] | None = None) -> BuildReport:
+    """progress(stage, done, total) is called during scan / binaries / copy / write."""
     game = Path(game).resolve()
+
+    def check() -> None:
+        if cancel is not None and cancel.is_set():
+            raise BuildCancelled("cancelled")
+
+    def prog(stage: str, i: int, n: int) -> None:
+        check()
+        if progress:
+            progress(stage, i, n)
     if opts.target not in sdk.SUPPORTED_TARGETS:
         raise BuildError(f"unsupported target {opts.target} (supported: {sdk.SUPPORTED_TARGETS})")
     if opts.mode not in MODES:
@@ -231,7 +247,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             raise BuildError(f"output folder {out} is not empty")
 
     log(f"scanning {game}")
-    gs = scan_game(game)
+    gs = scan_game(game, progress=lambda i, n, name: prog("scan", i + 1, n))
     rep = BuildReport(str(game), gs.title_id, gs.title, opts.target, opts.mode, str(out),
                       datetime.datetime.now().isoformat(timespec="seconds"))
     rep.warnings += gs.warnings
@@ -278,9 +294,9 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             forced.add(rel)
 
     # 3. game binaries
-    for bi in gs.binaries:
-        if bi.role == "fakelib":
-            continue
+    todo = [bi for bi in gs.binaries if bi.role != "fakelib"]
+    for k, bi in enumerate(todo):
+        prog("binaries", k, len(todo))
         process(bi.path, game / bi.path)
 
     # 3b. fix rules
@@ -353,15 +369,17 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     out.mkdir(parents=True, exist_ok=True)
     if opts.mode == "full":
         stats = {"reflink": 0, "copy": 0}
-        for dp, dn, fn in os.walk(game, followlinks=True):
-            for f in fn:
-                src = Path(dp) / f
-                rel = str(src.relative_to(game))
-                if rel in outputs or (rel == pj_rel and pj_new is not None) or rel.startswith("fakelib/"):
-                    continue
-                stats[clone_file(src, out / rel)] += 1
+        files = [Path(dp) / f for dp, dn, fn in os.walk(game, followlinks=True) for f in fn]
+        for k, src in enumerate(files):
+            prog("copy", k, len(files))
+            rel = str(src.relative_to(game))
+            if rel in outputs or (rel == pj_rel and pj_new is not None) or rel.startswith("fakelib/"):
+                continue
+            stats[clone_file(src, out / rel)] += 1
         log(f"cloned {stats['reflink']} file(s) by reflink, copied {stats['copy']}")
-    for rel, (b, raw, allowed) in outputs.items():
+    for k, (rel, (b, raw, allowed)) in enumerate(outputs.items()):
+        if progress:                      # not cancellable: never stop half-way through writing
+            progress("write", k, len(outputs))
         dst = out / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if opts.mode == "inplace" and dst.exists():
@@ -409,3 +427,25 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         raise BuildError("verification failed:\n  " + "\n  ".join(problems))
     log(f"done: {len(rep.edits)} edit(s), {len(rep.fakelibs)} fakelib(s), {len(rep.verified)} binaries verified")
     return rep
+
+
+@dataclass
+class Plan:
+    """Read-only analysis for UIs: scan, import coverage and fix-rule findings."""
+    scan: GameScan
+    coverage: Coverage | None
+    findings: list            # rules.Finding
+
+
+def plan(game: Path | str, target: int, db: EvidenceDB | None = None, patches: list[Path] | None = None,
+         progress: Callable[[str, int, int], None] | None = None) -> Plan:
+    from .rules import RuleContext, detect_all, file_loader
+    game = Path(game).resolve()
+    gs = scan_game(game, progress=(lambda i, n, name: progress("scan", i + 1, n)) if progress else None)
+    cov = coverage_analyze(gs, db, target) if db is not None and db.kits() else None
+    findings = []
+    if gs.eboot and not any(b.error for b in gs.binaries if b.role != "fakelib"):
+        ctx = RuleContext(gs, cov, target, load=file_loader(game), edit=lambda *a, **k: None,
+                          options={"patches": list(patches or [])})
+        findings = detect_all(ctx)
+    return Plan(gs, cov, findings)
