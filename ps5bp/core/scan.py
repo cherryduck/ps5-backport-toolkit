@@ -143,7 +143,7 @@ def scan_binary(path: Path, root: Path, role: str) -> BinaryInfo:
 
 
 def iter_binaries(root: Path):
-    for dp, dn, fn in os.walk(root):
+    for dp, dn, fn in os.walk(root, followlinks=True):
         dn.sort()
         for f in sorted(fn):
             p = Path(dp) / f

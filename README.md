@@ -3,7 +3,7 @@
 Point it at a decrypted PS5 game dump (fake-signed SELFs, e.g. from ps5-app-dumper)
 and it analyzes — and, in later phases, builds — a backport for firmware 4.xx–7.xx.
 
-Status: **phase 3 — analyze, kit library / import coverage, build.**
+Status: **phase 4 — analyze, kit library / import coverage, build, fix rules + patch recipes.**
 
 ```
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
@@ -54,6 +54,33 @@ input; any byte changed outside a recorded edit fails the build. A
 `backport-report.json/.txt` lists every edit.
 
 Overlay output contains only changed files + `fakelib/` — copy it over the game.
+
+## Fix rules
+
+```
+ps5bp rules                                            # list rules + built-in recipes
+ps5bp build GAME --target 4 --out OUT --rule pro-disable
+ps5bp build GAME --target 4 --out OUT --rule pssr-memory
+ps5bp build GAME --target 4 --out OUT --patch my-fix.json
+```
+
+Every rule is off by default; `build` reports which ones are recommended and why.
+
+| rule | what it does |
+|---|---|
+| `pro-disable` | Pro hardware query (`NH6xARDOVv8`) -> base PS5 (both outputs 0, as DLPS's stub), `sceKernelIsTrinityMode` -> 0. The PLT entry becomes the stub; if the NID is proven absent on the target the import is bound locally. |
+| `pssr-memory` | Keep Pro/PSSR, fit its startup allocations. Per-game recipes in `ps5bp/data/recipes/` (Wolverine 01.001.005 included — reproduces the DLPS FW4 eboot byte for byte). Conflicts with `pro-disable`. |
+| `stub-absent` | Every other import proven absent on the target -> `return 0`, bound locally. Blunt. |
+| `user-patch` | Apply recipe files (`--patch`). |
+
+### Patch recipes
+
+JSON, verifiable and shareable — see the docstring in `ps5bp/core/recipe.py`. A recipe
+lists byte signatures that must match (so it refuses the wrong game version or an
+already-patched file), code caves appended to a segment (hex + `rel32`/`rel8`/`rip`
+fixups, `nid:XXXX` resolves to an import's PLT stub, `@label` to cave labels), call
+retargets with expected old targets, and plain old->new byte edits. Caves grow the
+segment in place inside the SELF; the build's verification still covers every byte.
 
 ## Tests
 

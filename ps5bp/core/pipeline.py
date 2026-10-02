@@ -60,6 +60,9 @@ class BuildOptions:
     force: bool = False          # allow input that is already backported (has fakelib/)
     strict: bool = False         # fail when coverage reports absent/missing modules
     dry_run: bool = False
+    rules: set[str] = field(default_factory=set)       # opt-in rules (--rule)
+    no_rules: set[str] = field(default_factory=set)    # disabled rules (--no-rule)
+    patches: list[Path] = field(default_factory=list)  # user recipe files (--patch)
 
 
 @dataclass
@@ -76,6 +79,7 @@ class BuildReport:
     warnings: list[str] = field(default_factory=list)
     verified: list[str] = field(default_factory=list)
     coverage: dict = field(default_factory=dict)
+    findings: list[dict] = field(default_factory=list)
     ok: bool = False
 
     def to_json(self) -> str:
@@ -92,6 +96,12 @@ class BuildReport:
             for e in es:
                 where = f"@{e.offset:#x} " if e.offset >= 0 else ""
                 L.append(f"   {e.kind:10} {where}{e.old} -> {e.new}  {e.note}".rstrip())
+        if self.findings:
+            L += ["", "fix rules:"]
+            for f in self.findings:
+                state = "APPLIED" if f["applied"] else ("recommended" if f["recommended"] else
+                                                       ("n/a" if not f["applicable"] else "available"))
+                L.append(f"   [{state:11}] {f['rule']:12} {f['title']}" + (f" — {f['reason']}" if f["reason"] else ""))
         if self.fakelibs:
             L += ["", "fakelibs:"] + [f"   {x['file']}  from {x['kit']} (FW{x['kit_fw']})" for x in self.fakelibs]
         if self.warnings:
@@ -249,26 +259,57 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         rep.warnings.append("no kits in the library — fakelibs not selected (ps5bp kit add ...)")
 
     retargets = load_retargets() if opts.retarget else []
-    outputs: dict[str, tuple[Binary, bytes, list[tuple[int, int]]]] = {}   # rel -> (binary, input bytes, allowed)
+    working: dict[str, tuple[Binary, bytes]] = {}        # rel -> (working copy, input bytes)
+    forced: set[str] = set()                                 # written even without edits (fakelibs)
+
+    def get(rel: str, src: Path) -> Binary:
+        if rel not in working:
+            raw = src.read_bytes()
+            working[rel] = (Binary(raw, src), raw)
+        return working[rel][0]
 
     def process(rel: str, src: Path, kind_note: str = "") -> None:
-        raw = src.read_bytes()
-        b = Binary(raw, src)
-        allowed: list[tuple[int, int]] = []
+        b = get(rel, src)
         for off, old, new, note in downgrade_sdk(b, opts.target):
             rep.edits.append(Edit(rel, "sdk", off, old, new, note))
-            allowed.append((off, len(old) // 2))
         for off, old, new, note in retarget_imports(b, opts.target, retargets):
             rep.edits.append(Edit(rel, "retarget", off, old, new, note))
-            allowed.append((off, len(old)))
-        if allowed or kind_note:
-            outputs[rel] = (b, raw, allowed)
+        if kind_note:
+            forced.add(rel)
 
     # 3. game binaries
     for bi in gs.binaries:
         if bi.role == "fakelib":
             continue
         process(bi.path, game / bi.path)
+
+    # 3b. fix rules
+    from .rules import RuleContext, detect_all, resolve
+    enabled = set(opts.rules) | ({"user-patch"} if opts.patches else set())
+    try:
+        active = {r.name: r for r in resolve(enabled, set(opts.no_rules))}
+    except ValueError as e:
+        raise BuildError(str(e)) from None
+    ctx = RuleContext(gs, cov, opts.target, load=lambda rel: get(rel, game / rel),
+                      edit=lambda file, kind, off, old, new, note="": rep.edits.append(
+                          Edit(file, kind, off, old, new, note)),
+                      options={"patches": [Path(x) for x in opts.patches]})
+    for f in detect_all(ctx):
+        applied = False
+        if f.rule in active:
+            if f.applicable:
+                try:
+                    active[f.rule].apply(ctx, f)
+                except Exception as e:                       # noqa: BLE001
+                    raise BuildError(f"rule {f.rule} failed on {f.file}: {e}") from None
+                applied = True
+            else:
+                rep.warnings.append(f"rule {f.rule}: {f.title} not applicable: {f.reason}")
+        elif f.recommended and f.applicable:
+            rep.warnings.append(f"recommended: --rule {f.rule}  ({f.title}{'; ' + f.reason if f.reason else ''})")
+        rep.findings.append({"rule": f.rule, "file": f.file, "title": f.title, "applicable": f.applicable,
+                             "recommended": f.recommended, "reason": f.reason, "applied": applied})
+
     # chosen fakelibs (copied from the kit store, then downgraded like everything else)
     if cov and opts.fakelibs:
         for m in cov.fakelibs():
@@ -287,6 +328,8 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         for bi in gs.binaries:
             if bi.role == "fakelib" and bi.path not in chosen and opts.fakelibs and cov:
                 rep.warnings.append(f"{bi.path}: left in place (not selected by coverage)")
+
+    outputs = {rel: (b, raw, b.writes) for rel, (b, raw) in working.items() if b.writes or rel in forced}
 
     # 4. param.json
     pj_rel = "sce_sys/param.json"
@@ -310,7 +353,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     out.mkdir(parents=True, exist_ok=True)
     if opts.mode == "full":
         stats = {"reflink": 0, "copy": 0}
-        for dp, dn, fn in os.walk(game):
+        for dp, dn, fn in os.walk(game, followlinks=True):
             for f in fn:
                 src = Path(dp) / f
                 rel = str(src.relative_to(game))

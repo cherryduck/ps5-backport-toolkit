@@ -1,0 +1,48 @@
+{
+ "name": "wolverine-pssr-memory",
+ "rule": "pssr-memory",
+ "title_id": "PPSA03671",
+ "file": "eboot.bin",
+ "note": "Marvel's Wolverine 01.001.005: keep Pro/PSSR but make the startup memory fit. Startup pool requests >= 256 MB are cut by 128 MB, and PSSR page-table memory is allocated as individual 2 MB direct-memory pages instead of one large block. Technique from the DLPS FW4 backport (reproduces its eboot byte for byte).",
+ "match": [
+  {"va": "0x4171867", "bytes": "e8b4e928fc"},
+  {"va": "0x42c445b", "bytes": "e8e036abff"}
+ ],
+ "caves": [
+  {"label": "pool", "segment": 0, "align": 16, "code": [
+   "4981fe00000010",
+   "rel8 72 @pool_go",
+   "4981ee00000008",
+   "label pool_go",
+   "rel32 e9 0x400220"
+  ]},
+  {"label": "pssr", "segment": 0, "align": 16, "code": [
+   "4881fe00002000",
+   "rel32 0f85 @fallback",
+   "55 4889e5 4157 4156 4155 4154 53 4883ec18",
+   "4989ff 4989f6 4989d5 4531e4 31db 4d85ed",
+   "rel32 0f84 @done",
+   "label loop",
+   "rel32 e8 nid:pO96TwzOm5E",
+   "48c745c800000000 4c8d4dc8 4889c6 4c89f2 4c89f1 41b80c000000 31ff",
+   "rel32 e8 nid:rTXw65xmLIA",
+   "85c0",
+   "rel32 0f85 @fail",
+   "488b45c8 498904df 4d01f4 48ffc3 4c39eb",
+   "rel32 0f85 @loop",
+   "label done",
+   "rip f04c0125 0xb113be8",
+   "b001 4883c418 5b 415c 415d 415e 415f 5d c3",
+   "label fail",
+   "bfffffffff",
+   "rel32 e8 nid:uMei1W9uyNo",
+   "0f0b",
+   "label fallback",
+   "rel32 e9 0x3d77b40"
+  ]}
+ ],
+ "ops": [
+  {"call": "0x4171867", "to": "@pool", "old_to": "0x400220"},
+  {"call": "0x42c445b", "to": "@pssr", "old_to": "0x3d77b40"}
+ ]
+}
