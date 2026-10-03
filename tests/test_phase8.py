@@ -252,12 +252,11 @@ def test_ac8_reproduces_dlps(tmp_path):
     db.add_kit(AC8 / "dlps-11386", 4, "dlps-11386")
     db.add_kit(kit, 4, "dlps-ac8", tested_fw=10)
     _, recipes = learn(dump, kit, "PPSA24913")
-    assert len(recipes) == 1 and len(recipes[0]["ops"]) == 3
-    rp = tmp_path / "learned.json"
-    rp.write_text(json.dumps(recipes[0]))
+    assert recipes == []                                  # phase 9: all explained by generic rules
     out = tmp_path / "out"
-    rep = build(dump, BuildOptions(target=4, target_minor=0x03, out=out, rules={"kit-stubs", "mapflex-flags"},
-                                   stubs_from=["dlps-ac8"], patches=[rp], replace_dump={"libSceAmpr": "dlps-ac8"}),
+    rep = build(dump, BuildOptions(target=4, target_minor=0x03, out=out,
+                                   rules={"kit-stubs", "mapflex-flags", "savedata-mount", "wwise-71"},
+                                   stubs_from=["dlps-ac8"], replace_dump={"libSceAmpr": "dlps-ac8"}),
                 db, log=lambda m: None)
     assert rep.ok and any("ampr_emu.index" in w for w in rep.warnings)
     for f in sorted(kit.rglob("*")):

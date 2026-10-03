@@ -161,6 +161,30 @@ def cmd_build(a) -> int:
     return 0
 
 
+def cmd_undo(a) -> int:
+    from .core.undo import UndoError, apply_undo, plan_undo
+    game = Path(a.game)
+    try:
+        up = plan_undo(game, [Path(r) for r in a.reports])
+    except UndoError as e:
+        print(f"undo refused: {e}", file=sys.stderr)
+        return 1
+    print(f"{up.count} edit(s) to reverse: {len(up.writes)} file(s) rewritten, {len(up.deletes)} removed, "
+          f"{len(up.restores)} restored from .orig")
+    for rel in sorted(up.writes):
+        print(f"  restore {rel}")
+    for rel in up.deletes:
+        print(f"  delete  {rel}")
+    for n in up.notes:
+        print(f"  note: {n}")
+    if a.dry_run:
+        print("dry run — nothing written")
+        return 0
+    apply_undo(game, up)
+    print("done")
+    return 0
+
+
 def cmd_klog(a) -> int:
     from .core import klog
     text = sys.stdin.read() if a.log == "-" else Path(a.log).read_text(errors="replace")
@@ -276,10 +300,17 @@ def cmd_kit(a) -> int:
                 print(f"{r.file}: {e['va']}  {e['old']} -> {e['new']}   {e['note']}")
         print("\nchanged bytes by kind: " + ", ".join(f"{k} {v}" for k, v in sorted(totals.items())))
         print("  sdk / imports: done by every build;  plt-stub: --rule kit-stubs (after `kit add`);  "
-              "mapflex: --rule mapflex-flags;  game: the recipe(s) below")
+              "mapflex: --rule mapflex-flags;  savedata: --rule savedata-mount;  wwise: --rule wwise-71")
+        if totals.get("game"):
+            print("  game: edits no generic rule explains (listed above) — each is a candidate for a new "
+                  "rule; --recipe writes them as a recipe for this game only")
         hdr = sorted({h for r in reps for h in r.header_only})
         if hdr:
             print(f"  not reproduced: ELF header edits ({', '.join(hdr)[:120]}) — re-signing artefacts")
+        if not a.recipe:
+            if not recipes:
+                print("nothing left unexplained: every change is reproduced by generic handling")
+            return 0
         outd = Path(a.out)
         outd.mkdir(parents=True, exist_ok=True)
         for rec in recipes:
@@ -337,6 +368,11 @@ def main(argv: list[str] | None = None) -> int:
     mf.add_argument("--result", type=int, metavar="N", help="record the console result of trial N")
     mf.add_argument("outcome", nargs="?", help="works | crash (with --result)")
     mf.set_defaults(func=cmd_memfix)
+    ud = sub.add_parser("undo", help="reverse builds applied to a game folder, using their reports")
+    ud.add_argument("game", help="folder the build output was applied to")
+    ud.add_argument("reports", nargs="+", help="backport-report.json (or its folder), NEWEST FIRST")
+    ud.add_argument("--dry-run", action="store_true")
+    ud.set_defaults(func=cmd_undo)
     kl = sub.add_parser("klog", help="triage a crash log (klog)")
     kl.add_argument("log", help="klog text file, or - for stdin")
     kl.add_argument("--game", help="game folder the log is from (resolves backtrace calls)")
@@ -356,9 +392,10 @@ def main(argv: list[str] | None = None) -> int:
     ka.add_argument("--replace", action="store_true")
     ka.add_argument("--tested-fw", type=int, help="firmware the kit was actually run on, if not --fw "
                     "(its 'present' evidence is then recorded for that FW)")
-    kn = ks.add_parser("learn", help="turn a kit's game-specific code edits into recipes")
+    kn = ks.add_parser("learn", help="explain a kit's edits; list the ones no generic rule covers")
     kn.add_argument("original", help="the original (un-backported) game dump")
     kn.add_argument("kit", help="the backport kit folder for the same game version")
+    kn.add_argument("--recipe", action="store_true", help="also write the unexplained edits as a per-game recipe")
     kn.add_argument("--out", default=".", help="where to write the recipe JSON (default: .)")
     ks.add_parser("list")
     kr = ks.add_parser("remove")

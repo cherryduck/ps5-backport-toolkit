@@ -514,7 +514,10 @@ class MainWindow(QMainWindow):
         box = QMessageBox(self)
         box.setWindowTitle("Backport built")
         box.setText(f"{len(rep.edits)} edit(s), {len(rep.fakelibs)} fakelib(s), "
-                    f"{len(rep.verified)} binaries verified.\n\n{rep.out}")
+                    f"{len(rep.verified)} binaries verified.\n\n{rep.out}"
+                    + (f"\n\nCopying this over the game replaces its files. The originals are saved in\n"
+                       f"{rep.originals}\nand `ps5bp undo GAME {rep.out}` puts them back."
+                       if rep.originals else ""))
         if rep.warnings:
             box.setDetailedText("\n".join(rep.warnings))
         openb = box.addButton("Open folder", QMessageBox.ButtonRole.ActionRole)

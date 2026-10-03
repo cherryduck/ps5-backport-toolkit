@@ -89,6 +89,7 @@ class BuildReport:
     fakelibs: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     verified: list[str] = field(default_factory=list)
+    originals: str = ""                         # overlay: where the replaced input files were saved
     coverage: dict = field(default_factory=dict)
     findings: list[dict] = field(default_factory=list)
     memfix_trial: int | None = None
@@ -123,6 +124,9 @@ class BuildReport:
         if self.memfix_trial is not None:
             L += ["", f"memfix trial {self.memfix_trial}: test on the console, then "
                   f"`ps5bp memfix GAME --result {self.memfix_trial} works|crash [--klog new.txt]`"]
+        if self.originals:
+            L += ["", f"originals of every replaced file: {self.originals}", "   if this overlay is copied over "
+                  "the game, restore with: ps5bp undo GAME " + self.out + "  (or copy that folder back)"]
         L += ["", f"verified {len(self.verified)} binaries"]
         return "\n".join(L) + "\n"
 
@@ -345,7 +349,8 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     ctx = RuleContext(gs, cov, opts.target, load=lambda rel: get(rel, game / rel),
                       edit=lambda file, kind, off, old, new, note="": rep.edits.append(
                           Edit(file, kind, off, old, new, note)),
-                      options={"patches": patches, "enabled": set(active), "stubs_from": opts.stubs_from})
+                      options={"patches": patches, "enabled": set(active), "stubs_from": opts.stubs_from,
+                               "db": db})
     for f in detect_all(ctx):
         applied = False
         if f.rule in active:
@@ -421,6 +426,19 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     # 5. write
     log(f"writing {opts.mode} output to {out}")
     out.mkdir(parents=True, exist_ok=True)
+    if opts.mode == "overlay":
+        # an overlay is meant to be copied over the game: keep what it would overwrite / what
+        # must be deleted, beside it (not inside: it would end up in the game folder)
+        odir = out.parent / (out.name + ".originals")
+        keep = list(outputs) + ([pj_rel] if pj_new is not None else []) + remove
+        saved = 0
+        for rel in keep:
+            if (game / rel).is_file() and not (odir / rel).exists():
+                clone_file(game / rel, odir / rel)
+                saved += 1
+        if saved or odir.exists():
+            rep.originals = str(odir)
+            log(f"saved {saved} original file(s) to {odir}")
     if opts.mode == "full":
         stats = {"reflink": 0, "copy": 0}
         files = [Path(dp) / f for dp, dn, fn in os.walk(game, followlinks=True) for f in fn]
@@ -514,6 +532,6 @@ def plan(game: Path | str, target: int, db: EvidenceDB | None = None, patches: l
     findings = []
     if gs.eboot and not any(b.error for b in gs.binaries if b.role != "fakelib"):
         ctx = RuleContext(gs, cov, target, load=file_loader(game), edit=lambda *a, **k: None,
-                          options={"patches": list(patches or [])})
+                          options={"patches": list(patches or []), "db": db})
         findings = detect_all(ctx)
     return Plan(gs, cov, findings)
