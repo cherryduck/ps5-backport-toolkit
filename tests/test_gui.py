@@ -137,3 +137,14 @@ def test_memfix_tab_trial(win, tmp_path):
     assert "works" in win.mf_out.toPlainText()
     win.game_edit.setText(str(tmp_path))                     # another game: site list forgotten
     assert win.mf_table.rowCount() == 0 and not win.memfix_choices()
+
+
+def test_output_follows_game(win, tmp_path):
+    a, b = tmp_path / "PPSA00001", tmp_path / "PPSA00002"
+    win.game_edit.setText(str(a))
+    assert win.out_edit.text() == str(tmp_path / "PPSA00001-backport")
+    win.out_edit.setText(str(tmp_path / "custom"))            # user's choice for this game stays
+    win._invalidate()
+    assert win.out_edit.text() == str(tmp_path / "custom")
+    win.game_edit.setText(str(b))                              # another game: never reuse it
+    assert win.out_edit.text() == str(tmp_path / "PPSA00002-backport")
