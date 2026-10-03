@@ -84,6 +84,16 @@ def test_recommendation_from_kit_evidence(tmp_path):
     assert r6[0] is False and "k6" in r6[1]
 
 
+def test_confirmed_prior_beats_kit_observation(tmp_path):
+    from ps5bp.core.rules.evidence_rules import recommendation
+    db = SimpleNamespace(rule_observations=lambda r: [{"kit": "k4", "relpath": "eboot.bin", "fw": 4, "tested_fw": None,
+                                                        "unfixed": 3, "fixed": 0, "sig": "x"}])
+    ctx = SimpleNamespace(target=4, options={"db": db})
+    assert recommendation("wwise-71", ctx, {"needed_max": 4, "ok_min": 99})[0] is False
+    ok, why = recommendation("wwise-71", ctx, {"needed_max": 4, "ok_min": 99, "confirmed": "console"})
+    assert ok and "contradicted" in why
+
+
 def test_wwise_sites_skip_tables():
     from ps5bp.core.rules.wwise71 import CFG_714, sites
     c = CFG_714.to_bytes(4, "little")
@@ -155,7 +165,7 @@ def test_ac8_generic_rules_no_recipe(tmp_path):
     db.add_kit(AC8 / "viet-11386", 6, "viet-11386")
     p = plan(dump, 4, db)
     rec = {f.rule for f in p.findings if f.recommended}
-    assert "savedata-mount" in rec and "wwise-71" not in rec
+    assert {"savedata-mount", "wwise-71"} <= rec          # both console-confirmed on AC8
     db.add_kit(kit, 4, "dlps-ac8", tested_fw=10)
     out = tmp_path / "out"
     rep = build(dump, BuildOptions(target=4, target_minor=0x03, out=out,

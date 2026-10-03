@@ -107,7 +107,7 @@ Every rule is off by default; `build` / the GUI say which are recommended and wh
 | `kit-stubs` | Every import some kit PLT-stubbed for this FW gets the same stub, in every game binary (eboot, prx, sprx); `--stubs-from KIT` limits the sources. Pro NIDs are left to pro-disable / pssr-memory when those are on. |
 | `mapflex-flags` | Clear flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory` (DLPS's AC8 fix; their older 11386 build kept it). |
 | `savedata-mount` | `sceSaveDataMount3` param qword +0x18 = -1 -> 0 at every call whose struct is built in the calling function. Fixes CE-107098-5 when saving on 4.xx (console-confirmed on ACE COMBAT 8). Recommended from kit evidence: DLPS FW4 kits set it to 0 (AC8, PPSA11386), PSVIETHOA's FW6 PPSA11386 kept -1. |
-| `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) -> 7.1 where the game requests it (lookup tables left alone). Not recommended: DLPS's FW4 PPSA11386 kept 7.1.4, and the selection is conditional on the output reporting 12 channels. |
+| `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) -> 7.1 where the game requests it (lookup tables left alone). Recommended on 4.xx: console-tested on ACE COMBAT 8 — no sound without it, sound with it (DLPS's FW4 PPSA11386 kit kept 7.1.4; console tests beat kit observations). |
 | `stub-absent` | Every other import proven absent on the target -> `return 0`, bound locally. Blunt. |
 | `user-patch` | Apply recipe files (`--patch`). |
 

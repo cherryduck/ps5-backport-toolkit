@@ -7,7 +7,8 @@ title id (signature = file name + executable segment layout).
   * unfixed in a kit for FW X           -> the unfixed form works on X (and above)
   * fixed in a kit for FW Y while a kit of the same build is unfixed
                                          -> the fix was needed on Y (and below)
-These widen the rule's built-in prior (needed_max / ok_min).
+These widen the rule's built-in prior (needed_max / ok_min). A prior marked `confirmed`
+(tested on a console) wins over kit observations.
 """
 from __future__ import annotations
 
@@ -29,6 +30,12 @@ def recommendation(rule: str, ctx, prior: dict) -> tuple[bool, str]:
                                                        for o in rows) and r["fw"] >= needed:
                 needed, src_n = r["fw"], f"kit {r['kit']} fixed it"
     t = ctx.target
+    conf = prior.get("confirmed")            # console-tested: beats what kits merely suggest
+    if conf and t <= prior["needed_max"]:
+        why = f"needed on {prior['needed_max']}.xx and below ({conf})"
+        if ok <= t:
+            why += f"; {src_o} left it unfixed — contradicted by that test"
+        return True, why
     if t <= needed and t < ok:
         return True, f"needed on {needed}.xx and below ({src_n})"
     if t >= ok:
