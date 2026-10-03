@@ -197,6 +197,11 @@ def patch_param_json(text: str, target: int, minor: int = 0) -> tuple[str, list[
 
 
 # ---- output helpers --------------------------------------------------------------
+def is_previous_build(out: Path) -> bool:
+    """A folder ps5bp wrote (overlay/full output): safe to replace with a new build."""
+    return (out / "backport-report.json").is_file()
+
+
 def clone_file(src: Path, dst: Path) -> str:
     """Reflink if the filesystem supports it, else copy. Returns 'reflink' | 'copy'."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -259,8 +264,10 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         out = Path(opts.out).resolve()
         if out == game or game in out.parents:
             raise BuildError("output must be outside the game folder")
-        if out.exists() and any(out.iterdir()) and not opts.dry_run:
-            raise BuildError(f"output folder {out} is not empty")
+        if out in game.parents:
+            raise BuildError("output must not contain the game folder")
+        if out.exists() and any(out.iterdir()) and not opts.dry_run and not is_previous_build(out):
+            raise BuildError(f"output folder {out} is not empty (and not an earlier ps5bp build)")
 
     log(f"scanning {game}")
     gs = scan_game(game, progress=lambda i, n, name: prog("scan", i + 1, n))
@@ -424,6 +431,11 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         return rep
 
     # 5. write
+    if opts.mode != "inplace" and out.exists() and any(out.iterdir()):
+        # an earlier ps5bp build (checked above): replace it. Its <out>.originals is kept —
+        # if that overlay was copied over the game, those are the only true originals left.
+        log(f"replacing the previous build in {out}")
+        shutil.rmtree(out)
     log(f"writing {opts.mode} output to {out}")
     out.mkdir(parents=True, exist_ok=True)
     if opts.mode == "overlay":

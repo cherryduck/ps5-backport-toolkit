@@ -78,10 +78,11 @@ def _table_arm(b, base: int, va: int) -> bool:
 
 class Wwise71(Rule):
     name = "wwise-71"
-    summary = "Wwise 7.1.4 (12-channel) speaker config -> 7.1 (no sound on 4.xx otherwise)"
-    # Console-tested: ACE COMBAT 8 on 4.xx has no sound without it, sound with it. (DLPS's
+    summary = "Wwise 7.1.4 (12-channel) speaker config -> 7.1 (no sound for 4.xx-SDK builds otherwise)"
+    # Console-tested (PS5 Pro, 11.60, with the build's SDK lowered to 4.00): no sound without
+    # it, sound with it — so it follows the declared SDK, not the console FW. (DLPS's
     # FW4 PPSA11386 kit kept 7.1.4 — its sound on 4.xx is unverified.)
-    PRIOR = {"needed_max": 4, "ok_min": 99, "confirmed": "console-tested: ACE COMBAT 8 has no sound without it"}
+    PRIOR = {"needed_max": 4, "ok_min": 99, "confirmed": "console-tested: ACE COMBAT 8 built for 4.xx has no sound without it, on a PS5 Pro 11.60"}
 
     def detect(self, ctx: RuleContext) -> list[Finding]:
         if not is_wwise_game(ctx.gs):

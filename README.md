@@ -138,6 +138,12 @@ a last resort). For DLPS's ACE COMBAT 8 4.03 build nothing is left: with `kit-st
 `param.json` and DLPS's fakelib set byte for byte (ELF payload; their re-signer also
 zeroes e_shnum — and their unused libScePsml isn't shipped).
 
+## Rebuilding
+
+Building again into the same output folder replaces the earlier build (the GUI asks
+first); any other non-empty folder is refused. `<out>.originals/` is never deleted: if
+an earlier overlay was copied over the game, it holds the only untouched copies.
+
 ## Undo
 
 Overlay builds save the game's copy of every file they replace to `<out>.originals/`

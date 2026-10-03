@@ -65,10 +65,18 @@ def test_analyze_and_build(win, game, tmp_path):
     b = Binary.load(tmp_path / "out/eboot.bin")
     assert b.read(TEXT_VA, 7) == bytes.fromhex("31c089078906c3")
     assert sdk.find(b).ps5 == sdk.SDK_PAIRS[4][0]
-    # second build into the same (now non-empty) folder fails cleanly
+    # second build into the same folder replaces the earlier build
+    (tmp_path / "out/stale.txt").write_text("x")
     win._build()
     wait(win)
-    assert "not empty" in win.last_error and win.build_btn.isEnabled()
+    assert win.last_report.ok and not (tmp_path / "out/stale.txt").exists()
+    # a non-empty folder that isn't a ps5bp build is refused, untouched
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other/mine.txt").write_text("keep")
+    win.out_edit.setText(str(tmp_path / "other"))
+    win._build()
+    assert "not empty" in win.last_error and (tmp_path / "other/mine.txt").read_text() == "keep"
+    assert win.build_btn.isEnabled()
 
 
 def test_invalidate_on_target_change(win, game):

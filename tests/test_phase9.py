@@ -177,3 +177,21 @@ def test_ac8_generic_rules_no_recipe(tmp_path):
         a, b = bytearray(Binary.load(kit / rel).to_elf()), bytearray(Binary.load(out / rel).to_elf())
         a[0x3C:0x3E] = b[0x3C:0x3E] = b"\0\0"
         assert a == b, rel
+
+
+def test_rebuild_replaces_previous_output(tmp_path):
+    g, _ = mount_game(tmp_path / "src", MODE_VAR)
+    db = EvidenceDB(tmp_path / "home")
+    out = tmp_path / "out"
+    build(g, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    (out / "stale.txt").write_text("x")
+    rep = build(g, BuildOptions(target=4, out=out, rules={"savedata-mount"}), db, log=lambda m: None)
+    assert rep.ok and not (out / "stale.txt").exists() and (tmp_path / "out.originals").is_dir()
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "mine.txt").write_text("keep")
+    with pytest.raises(Exception, match="not empty"):
+        build(g, BuildOptions(target=4, out=other), db, log=lambda m: None)
+    with pytest.raises(Exception, match="contain the game"):
+        build(g, BuildOptions(target=4, out=tmp_path), db, log=lambda m: None)
+    assert (other / "mine.txt").read_text() == "keep" and g.is_dir()
