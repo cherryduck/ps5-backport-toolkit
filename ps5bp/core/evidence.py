@@ -44,6 +44,8 @@ EXTRA_EXTS = {".psp"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kits (name TEXT PRIMARY KEY, fw INTEGER NOT NULL, source TEXT,
     title_id TEXT, added TEXT, store TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS rule_obs (rule TEXT, kit TEXT, relpath TEXT, fw INTEGER, tested_fw INTEGER,
+    unfixed INTEGER, fixed INTEGER, sig TEXT);
 CREATE TABLE IF NOT EXISTS stubs (kit TEXT, relpath TEXT, module TEXT, nid TEXT, body TEXT,
     fw INTEGER);
 CREATE TABLE IF NOT EXISTS files (kit TEXT, relpath TEXT, role TEXT, module TEXT, sha256 TEXT,
@@ -131,7 +133,7 @@ class EvidenceDB:
         k = self.kit(name)
         if not k:
             return False
-        for t in ("kits", "files", "exports", "evidence", "stubs"):
+        for t in ("kits", "files", "exports", "evidence", "stubs", "rule_obs"):
             col = "name" if t == "kits" else "kit"
             self.db.execute(f"DELETE FROM {t} WHERE {col}=?", (name,))
         self.db.commit()
@@ -209,6 +211,11 @@ class EvidenceDB:
                 n_stubs += len(stubs)
             if i.role == "fakelib" and is_loading_layer(i.module):
                 continue                                   # emulation layer: not FW evidence
+            if i.role != "fakelib":
+                from .rules.evidence_rules import probe_kit
+                for rule, unf, fix, sig in probe_kit(root / i.path, i.role):
+                    c.execute("INSERT INTO rule_obs VALUES (?,?,?,?,?,?,?,?)",
+                              (rule, name, i.path, fw, tested_fw, unf, fix, sig))
             for mod, nids in i.imports_by_module.items():
                 if mod in replaced or mod in game_mods or not is_system_module(mod):
                     continue
@@ -239,6 +246,11 @@ class EvidenceDB:
         rows = self.db.execute("SELECT DISTINCT nid FROM evidence WHERE module=? AND present=0 AND fw>=?",
                                (module, target))
         return {r[0] for r in rows}
+
+    def rule_observations(self, rule: str) -> list[dict]:
+        rows = self.db.execute("SELECT kit, relpath, fw, tested_fw, unfixed, fixed, sig FROM rule_obs WHERE rule=?",
+                               (rule,))
+        return [dict(zip(("kit", "relpath", "fw", "tested_fw", "unfixed", "fixed", "sig"), r)) for r in rows]
 
     def stubbed(self, module: str, target: int) -> dict[str, list[tuple[str, str, int, str]]]:
         """NIDs of `module` some kit replaced with a PLT stub for a FW >= target:

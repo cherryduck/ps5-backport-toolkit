@@ -6,7 +6,11 @@ Changes the toolkit already makes on its own are classified and left out:
   plt-stub  overwritten PLT entries                              (rule kit-stubs, via kit add)
   imports   dynamic string table (NID renames)                    (nid_retarget.txt)
   mapflex   `mov ecx,0x8000` at the retargeted libc call          (rule mapflex-flags)
-Everything else is game logic. Edits inside executable segments get byte-signature
+  savedata  sceSaveDataMount3 param +0x18 -1 -> 0                 (rule savedata-mount)
+  wwise     AkChannelConfig 7.1.4 -> 7.1                          (rule wwise-71)
+Everything else is unexplained: reported as a candidate for a new generic rule (with what
+the bytes feed: an import's argument, a constant, data). A per-game recipe is written only
+when asked for (`--recipe`): it helps that one game, a generic rule helps every game. Edits inside executable segments get byte-signature
 anchors (so the recipe can follow the code into another build); data edits keep their VA.
 One recipe per binary, bound to the title, applied with `build --patch FILE`.
 """
@@ -66,6 +70,16 @@ def _explained(ob: Binary, nb: Binary, base: int) -> list[tuple[int, int, str]]:
         for va in sites(ob, base):
             out.append((va, va + 5, "mapflex"))
     except Exception:                                   # noqa: BLE001 — no exec segment etc.
+        pass
+    from .rules.savedata_mount import sites as sd_sites
+    from .rules.wwise71 import sites as ww_sites
+    try:
+        for s in sd_sites(ob, base):
+            if s["state"] == "unfixed":
+                out.append((s["store"], s["store"] + s["len"], "savedata"))
+        for ins, imm, n in ww_sites(ob, base):
+            out.append((imm, imm + 4 * n, "wwise"))
+    except Exception:                                   # noqa: BLE001
         pass
     return out
 

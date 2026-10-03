@@ -106,6 +106,8 @@ Every rule is off by default; `build` / the GUI say which are recommended and wh
 | `pssr-memory` | Keep Pro/PSSR, fit its startup allocations. Per-game recipes in `ps5bp/data/recipes/` (Wolverine 01.001.005 included — reproduces the DLPS FW4 eboot byte for byte). Conflicts with `pro-disable`. |
 | `kit-stubs` | Every import some kit PLT-stubbed for this FW gets the same stub, in every game binary (eboot, prx, sprx); `--stubs-from KIT` limits the sources. Pro NIDs are left to pro-disable / pssr-memory when those are on. |
 | `mapflex-flags` | Clear flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory` (DLPS's AC8 fix; their older 11386 build kept it). |
+| `savedata-mount` | `sceSaveDataMount3` param qword +0x18 = -1 -> 0 at every call whose struct is built in the calling function. Fixes CE-107098-5 when saving on 4.xx (console-confirmed on ACE COMBAT 8). Recommended from kit evidence: DLPS FW4 kits set it to 0 (AC8, PPSA11386), PSVIETHOA's FW6 PPSA11386 kept -1. |
+| `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) -> 7.1 where the game requests it (lookup tables left alone). Not recommended: DLPS's FW4 PPSA11386 kept 7.1.4, and the selection is conditional on the output reporting 12 channels. |
 | `stub-absent` | Every other import proven absent on the target -> `return 0`, bound locally. Blunt. |
 | `user-patch` | Apply recipe files (`--patch`). |
 
@@ -117,20 +119,31 @@ already-patched file), code caves appended to a segment (hex + `rel32`/`rel8`/`r
 fixups; `nid:XXXX` = an import's PLT stub, `@label` = cave label), call retargets with
 their expected old targets, and plain old->new byte edits.
 
-## Learning a backport's game-specific edits (`kit learn`)
+## Kits are evidence, not prerequisites
+
+ps5bp is meant for games nobody has backported. Every fix learned from a kit becomes a
+generic rule with its own detector, and `kit add` records, per rule, whether each kit
+shows the pattern fixed or unfixed — that is where the "recommended on 4.xx" stars come
+from (the PPSA11386 kits make savedata-mount recommended for ACE COMBAT 8).
 
 ```
-ps5bp kit learn ORIGINAL_DUMP KIT --out recipes/
-ps5bp build ORIGINAL_DUMP --target 4.03 --out OUT --rule kit-stubs --rule mapflex-flags --patch recipes/*.json
+ps5bp kit learn ORIGINAL_DUMP KIT            # explain every change a kit made
 ```
 
-Diffs every kit binary against the dump's copy and sorts the changes: SDK fields, import
-renames, PLT stubs and the libc flag are things ps5bp does itself; whatever is left is game
-logic and becomes an anchored recipe. For DLPS's ACE COMBAT 8 4.03 build that is exactly 3
-edits (SaveDataMount3 field -1 -> 0, Wwise 7.1.4 -> 7.1 at two sites); with the kit added
-and those rules on, the build reproduces all 58 game binaries, `param.json` and the fakelib set
-DLPS shipped byte for byte (ELF payload; DLPS's re-signer also zeroes e_shnum, which ps5bp
-doesn't copy — and their unused libScePsml isn't shipped).
+Sorts each changed byte: SDK fields, import renames, PLT stubs, the libc flag, the
+SaveData field and Wwise configs are all reproduced by generic handling. Anything left is
+printed as a candidate for a new rule (`--recipe --out DIR` writes it as a per-game recipe,
+a last resort). For DLPS's ACE COMBAT 8 4.03 build nothing is left: with `kit-stubs`,
+`mapflex-flags`, `savedata-mount` and `wwise-71` the build reproduces all 58 game binaries,
+`param.json` and DLPS's fakelib set byte for byte (ELF payload; their re-signer also
+zeroes e_shnum — and their unused libScePsml isn't shipped).
+
+## Undo
+
+Overlay builds save the game's copy of every file they replace to `<out>.originals/`
+(beside the output, so it isn't copied into the game). If an overlay was copied over the
+game, `ps5bp undo GAME OUT [OLDER_OUT ...]` (newest first) restores it — from the saved
+originals, or, for builds without them, by reversing every edit in the reports.
 
 ## Memory fixes (`memfix`)
 
