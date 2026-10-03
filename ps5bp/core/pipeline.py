@@ -202,6 +202,14 @@ def is_previous_build(out: Path) -> bool:
     return (out / "backport-report.json").is_file()
 
 
+def previous_build_title(out: Path) -> str | None:
+    """Title id of the earlier ps5bp build in `out` ('' if unknown), None if there is none."""
+    try:
+        return json.loads((out / "backport-report.json").read_text()).get("title_id") or ""
+    except (OSError, ValueError):
+        return None
+
+
 def clone_file(src: Path, dst: Path) -> str:
     """Reflink if the filesystem supports it, else copy. Returns 'reflink' | 'copy'."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +279,10 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
 
     log(f"scanning {game}")
     gs = scan_game(game, progress=lambda i, n, name: prog("scan", i + 1, n))
+    if opts.mode != "inplace" and not opts.dry_run:
+        prev = previous_build_title(out)
+        if prev and gs.title_id and prev != gs.title_id:
+            raise BuildError(f"{out} holds the backport of another game ({prev}) — choose another output folder")
     rep = BuildReport(str(game), gs.title_id, gs.title, opts.target, opts.mode, str(out),
                       datetime.datetime.now().isoformat(timespec="seconds"))
     rep.target_str = sdk.target_str(opts.target, opts.target_minor)

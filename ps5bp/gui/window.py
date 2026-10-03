@@ -66,6 +66,8 @@ class MainWindow(QMainWindow):
         row.addWidget(QLabel("Game folder:"))
         self.game_edit = QLineEdit(self.settings.value("game", ""))
         self.game_edit.setPlaceholderText("decrypted game dump (contains eboot.bin, sce_sys/, sce_module/)")
+        self._out_game = self.game_edit.text().strip()     # game the output folder was chosen for
+        self.game_edit.textChanged.connect(self._game_changed)
         self.game_edit.textChanged.connect(self._invalidate)
         self.game_edit.textChanged.connect(self._mf_clear)
         row.addWidget(self.game_edit, 1)
@@ -310,8 +312,18 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "Game folder", self.game_edit.text())
         if d:
             self.game_edit.setText(d)
-            if not self.out_edit.text():
-                self.out_edit.setText(str(Path(d).parent / f"{Path(d).name}-backport"))
+
+    @staticmethod
+    def default_out(game: str) -> str:
+        g = Path(game.strip()).expanduser()
+        return str(g.parent / f"{g.name}-backport") if game.strip() else ""
+
+    def _game_changed(self, text: str) -> None:
+        # the output folder belongs to one game: a different game gets its own default,
+        # so one game's backport can never be built over another's
+        if text.strip() != self._out_game:
+            self._out_game = text.strip()
+            self.out_edit.setText(self.default_out(text))
 
     def _browse_out(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Output folder", self.out_edit.text())
@@ -478,9 +490,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Output folder", "Choose an output folder.")
             return
         if opts.mode != "inplace":
-            from ..core.pipeline import is_previous_build
+            from ..core.pipeline import is_previous_build, previous_build_title
             o = Path(self.out_edit.text().strip()).expanduser()
             if o.is_dir() and any(o.iterdir()):
+                prev = previous_build_title(o)
+                tid = self.plan.scan.title_id if self.plan else ""
+                if prev and tid and prev != tid:
+                    self.last_error = f"{o} holds the backport of another game ({prev}). Choose another folder."
+                    self.say(self.last_error)
+                    if not getattr(self, "_headless", False):
+                        QMessageBox.warning(self, "Output folder", self.last_error)
+                    return
                 if not is_previous_build(o):
                     self.last_error = (f"{o} is not empty and isn't an earlier ps5bp build. "
                                        "Choose an empty or new folder.")

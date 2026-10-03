@@ -195,3 +195,13 @@ def test_rebuild_replaces_previous_output(tmp_path):
     with pytest.raises(Exception, match="contain the game"):
         build(g, BuildOptions(target=4, out=tmp_path), db, log=lambda m: None)
     assert (other / "mine.txt").read_text() == "keep" and g.is_dir()
+
+
+def test_refuses_other_games_previous_build(tmp_path):
+    g, _ = mount_game(tmp_path / "src", MODE_VAR)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "backport-report.json").write_text(json.dumps({"title_id": "PPSA11111"}))
+    with pytest.raises(Exception, match="another game"):
+        build(g, BuildOptions(target=4, out=out), EvidenceDB(tmp_path / "home"), log=lambda m: None)
+    assert (out / "backport-report.json").is_file()
