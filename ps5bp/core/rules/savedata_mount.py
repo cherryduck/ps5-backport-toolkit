@@ -105,7 +105,7 @@ def sites(b, base: int) -> list[dict]:
 class SavedataMount(Rule):
     name = "savedata-mount"
     summary = "sceSaveDataMount3 param +0x18 = -1 -> 0 (save error CE-107098-5 on low FW)"
-    PRIOR = {"needed_max": 4, "ok_min": 6, "confirmed": "console-tested: ACE COMBAT 8 fails to save without it"}
+    PRIOR = {"needed_max": 4, "ok_min": 6, "confirmed": "console-tested: ACE COMBAT 8 built for 4.xx fails to save without it, on a PS5 Pro 11.60"}
 
     def detect(self, ctx: RuleContext) -> list[Finding]:
         rec, why = recommendation(self.name, ctx, self.PRIOR)

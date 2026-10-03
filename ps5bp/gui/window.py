@@ -477,6 +477,21 @@ class MainWindow(QMainWindow):
         if opts.mode != "inplace" and not self.out_edit.text().strip():
             QMessageBox.warning(self, "Output folder", "Choose an output folder.")
             return
+        if opts.mode != "inplace":
+            from ..core.pipeline import is_previous_build
+            o = Path(self.out_edit.text().strip()).expanduser()
+            if o.is_dir() and any(o.iterdir()):
+                if not is_previous_build(o):
+                    self.last_error = (f"{o} is not empty and isn't an earlier ps5bp build. "
+                                       "Choose an empty or new folder.")
+                    self.say(self.last_error)
+                    if not getattr(self, "_headless", False):
+                        QMessageBox.warning(self, "Output folder", self.last_error)
+                    return
+                if confirm and not getattr(self, "_headless", False) and QMessageBox.question(
+                        self, "Replace previous build", f"Replace the earlier backport in\n{o}?") \
+                        != QMessageBox.StandardButton.Yes:
+                    return
         if confirm and opts.mode == "inplace" and QMessageBox.question(
                 self, "Build in place", "Modify the game folder itself? Originals are kept as *.orig.") \
                 != QMessageBox.StandardButton.Yes:
