@@ -78,7 +78,7 @@ def _table_arm(b, base: int, va: int) -> bool:
 
 class Wwise71(Rule):
     name = "wwise-71"
-    summary = "Wwise 7.1.4 (12-channel) speaker config -> 7.1 (low FW refuses 12 channels)"
+    summary = "Wwise 7.1.4 (12-channel) speaker config -> 7.1 (DLPS AC8 4.03 change; unproven need)"
     # Unproven: DLPS's FW4 PPSA11386 kept 7.1.4 and the game ran; the AC8 selection is
     # conditional (cmovne on an output capability flag), so 4.xx likely never takes it.
     PRIOR = {"needed_max": 0, "ok_min": 99}
