@@ -608,6 +608,6 @@ No console binaries, game data, kits or logs are included, and none may be commi
 
 Format knowledge is public and was re-derived independently: SELF/ELF layout, the
 PT_SCE_PROCPARAM SDK fields (idlesauce's SDK downgrade script) and fakelib sideloading (BestPig's
-BackPork). The Wolverine PSSR memory recipe encodes the technique of the DLPS FW4 backport.
+BackPork). The Wolverine PSSR memory recipe encodes the technique of the Deckerr97 FW4 backport.
 Several rules re-implement techniques observed in community FW4 backports. No code from any of
 these projects is used.
