@@ -1,4 +1,6 @@
-# ps5bp — PS5 backport toolkit (Linux)
+# PS5 Backport Linux
+
+*A Linux toolkit for backporting PS5 games. The commands are `ps5bp` (command line) and `ps5bp-gui` (app).*
 
 **ps5bp turns a PS5 game dump into a *backport*: a version of the game that runs on a console
 with older firmware than the game was made for.** It has a graphical app (`ps5bp-gui`) and a
@@ -51,19 +53,24 @@ from a decrypted dump and copy the result onto the console your usual way.
 
 ## Install
 
-You need a Linux PC. Pick one:
+You need a Linux PC with git and Python 3.11 or newer. First get the code:
+```
+git clone https://github.com/cherryduck/ps5-backport-linux.git
+cd ps5-backport-linux
+```
+Then pick one:
 
-**Standalone app (no Python needed):**
+**Standalone app (nothing else to install afterwards):**
 ```
 scripts/build-bundle.sh                              # builds dist/ps5bp/ps5bp and dist/ps5bp/ps5bp-gui
-scripts/install-desktop.sh dist/ps5bp/ps5bp-gui      # adds "PS5 Backporter" to your app menu
+scripts/install-desktop.sh dist/ps5bp/ps5bp-gui      # adds "PS5 Backport Linux" to your app menu
 ```
 After pulling new changes, run `scripts/build-bundle.sh` again, or the app menu keeps starting
 the old version.
 
 **With pipx:**
 ```
-pipx install '/path/to/ps5-backporter[gui]'          # puts ps5bp and ps5bp-gui on your PATH
+pipx install '.[gui]'                                           # puts ps5bp and ps5bp-gui on your PATH
 scripts/install-desktop.sh                           # optional app-menu entry
 ```
 
@@ -381,10 +388,11 @@ else changed them since, it stops. *Force* / `--force` overrides that check.
 | `ps5bp rules` | List all fix rules and built-in recipes. |
 | `ps5bp undo GAME OUT [OLDER_OUT ...] [--dry-run] [--force]` | Restore a game folder an overlay was copied over. |
 | `ps5bp klog LOG [--game GAME]` | Explain a crash log, or the problem lines of a log without a crash (`-` reads from stdin). |
-| `ps5bp console send IP FILE.elf` | Send a payload to the console's ELF loader (port 9021). |
-| `ps5bp console klog IP [--out F] [--game G] [--dumps DIR]` | Live log with automatic crash and stuck-in-a-loop diagnosis and crash-dump capture. |
-| `ps5bp console dumps IP --out DIR` | Only capture crash dumps (FTP port 2121). |
-| `ps5bp memfix GAME [--klog F \| --from-console D] [--result N works\|crash] [--trials]` | Memory-allocation fixes and trial tracking. |
+| `ps5bp console send IP FILE.elf [--port 9021]` | Send a payload to the console's ELF loader (port 9021). |
+| `ps5bp console klog IP [--out F] [--game G] [--dumps DIR]` | Live log with automatic crash and stuck-in-a-loop diagnosis and crash-dump capture. Also `--port` (klog, 3232), `--ftp-port` (2121) and `--exit-after-crash`. |
+| `ps5bp console dumps IP --out DIR [--ftp-port 2121]` | Only capture crash dumps (FTP; `--port` is the same option). |
+| `ps5bp memfix GAME [--klog F \| --from-console D] [--result N works\|crash] [--trials]` | Memory-allocation fixes and trial tracking. `--file F` picks the executable (default `eboot.bin`), `--all` lists every allocation site. |
+| `ps5bp --version` | Show the installed version. |
 | `ps5bp kit add PATH --fw N [--tested-fw N] [--name] [--source] [--replace]` | Add a kit. |
 | `ps5bp kit list` / `kit remove NAME` | Show / delete kits. |
 | `ps5bp kit learn ORIGINAL KIT [--recipe --out DIR]` | Explain what a kit changed. |

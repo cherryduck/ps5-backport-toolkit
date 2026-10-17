@@ -51,7 +51,7 @@ def fill(t: QTableWidget, rows: list[list], colors: dict[int, str] | None = None
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"PS5 Backporter {__version__}")
+        self.setWindowTitle(f"PS5 Backport Linux {__version__}")
         self.resize(1100, 760)
         self.settings = QSettings("ps5bp", "ps5bp")
         self.plan = None
