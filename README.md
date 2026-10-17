@@ -53,6 +53,20 @@ are not kept; `PS5BP_HOME` overrides the location) and it contributes evidence:
 ps5bp kit add "ACE COMBAT 8 backport" --fw 4 --tested-fw 10    # built for 4.03, only run on 10.01
 ```
 
+* the kit's `sce_module/libc.prx` (small, so it is kept) is recorded for the **libc cross-check**: file
+  sha256, decoded-ELF sha256, size and an *identity* hash with ps5bp's own rule edits normalised away.
+  After a build, `backport-report.txt/json` gets a "libc cross-check" section: how many kits ship a
+  libc of the same identity as your output, whether yours is byte-identical (decoded) to each and, if
+  not, the first differing ranges labelled by the ps5bp edit that explains them (`sdk`, `tls-atexit`,
+  `mapflex-flags`, ... or "not explained by a ps5bp edit"). Report only — a libc is never substituted;
+  the rules stay the only source of edits. The identity normalises exactly: SDK fields (zeroed), retargeted
+  import strings, the flexible-memory flags (`b900800000` / `b900000000` / `31c9909090` -> `b900800000`),
+  the tls-atexit call (-> the import's PLT stub), contract GOT seeds (GOT back to PLT+6, cave back to
+  int3) and every SyncOnAddress/`_umtx_op` slot (PLT entry, GOT slot, 11-byte NID string zeroed; cave code
+  reachable from a shim or repointed GOT set back to int3). Anything else gives a libc its own identity.
+  Kits added before this feature have no record: `ps5bp kit reindex [NAME...]` recomputes it from the
+  stored libc, or says that none was stored (then `kit add --replace` it again).
+
 Ampr / PlayGo fakelibs are emulation layers that newer games need to load at all,
 whatever the FW: in kits they are stored but give no FW evidence; in a dump they are
 kept (status `dump`). Any other fakelib a dump ships is replaced by the kit-selected one.
@@ -171,7 +185,18 @@ ps5bp kit learn ORIGINAL_DUMP KIT            # explain every change a kit made
 ```
 
 Sorts each changed byte: SDK fields, import renames, PLT stubs, the libc flag, the
-SaveData field and Wwise configs are all reproduced by generic handling. Anything left is
+SaveData field and Wwise configs are all reproduced by generic handling. The phase-10c rules are
+understood too, so their edits are labelled with the rule instead of "unexplained": GOT seeds from the
+contract table (incl. the cave stub bytes, `compat-stubs`), `set3-nonfatal`, `gamepresets-28`,
+`savedata-mount` (wrappers, Unity vector copy), `savedata-prepare`, `savedata-dirsearch` (rename / GOT
+forward), `frostbite-8ch`, `tls-atexit`, `sync-umtx` (renames, PLT shims, anchor GOT, caves),
+`trinity-hw-gate` (rename, return-0 seed, derived OperationMode / AGC bodies) and the file-level
+`psml-overlay` (a `libScePsml` fakelib naming `/app0/k9.psp` plus the kit's root `k9.psp`). Byte-edit
+rules are matched exactly (the kit's bytes must equal what the rule writes; a different value at the
+same site stays unexplained with a note naming the rule); cave-placing rules are matched structurally,
+so a kit's choice of cave doesn't matter. `kit add` also records fixed/unfixed observations for
+`gamepresets-28`, `savedata-prepare`, `savedata-dirsearch`, `tls-atexit`, `set3-nonfatal` and
+`frostbite-8ch` (no recommendation is derived from them yet). Anything left is
 printed as a candidate for a new rule (`--recipe --out DIR` writes it as a per-game recipe,
 a last resort). For DLPS's ACE COMBAT 8 4.03 build nothing is left: with `kit-stubs`,
 `mapflex-flags`, `savedata-mount` and `wwise-71` the build reproduces all 58 game binaries,

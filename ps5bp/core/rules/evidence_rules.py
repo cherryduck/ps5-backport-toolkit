@@ -44,7 +44,54 @@ def recommendation(rule: str, ctx, prior: dict) -> tuple[bool, str]:
     return False, f"unknown on {t}.xx: needed on <= {needed}.xx, fine on >= {ok}.xx"
 
 
-PROBING = ("savedata-mount", "wwise-71")
+PROBING = ("savedata-mount", "wwise-71", "gamepresets-28", "savedata-prepare", "savedata-dirsearch",
+           "tls-atexit", "set3-nonfatal", "frostbite-8ch")
+# The phase-10c rules have no recommendation prior: their observations are recorded (kit, FW, signature)
+# so a rule can later get one the way savedata-mount did, but nothing is recommended from them yet.
+
+
+def _count(rows, key="status") -> tuple[int, int]:
+    st = [r[key] for r in rows]
+    return st.count("PATCH"), st.count("DONE")
+
+
+def probe_10c(b, base: int, d) -> list[tuple[str, int, int]]:
+    """(rule, unfixed, fixed) for the phase-10c rules whose import the binary has (d: dynamic.Dynamic)."""
+    from . import frostbite_8ch, gamepresets, gates, savedata_dirsearch, savedata_prepare, set3_nonfatal, tls_atexit
+    imports = d.imported_nids()
+    probes = []
+    if gamepresets.NID in imports:
+        probes.append(("gamepresets-28", lambda: _count(gamepresets.sites(b, base))))
+    if savedata_prepare.NID in imports:
+        probes.append(("savedata-prepare", lambda: _count(savedata_prepare.sites(b, base))))
+    if savedata_dirsearch.SEARCH2 in imports:
+        probes.append(("savedata-dirsearch", lambda: _count([savedata_dirsearch.site(b, base) or {"status": ""}])))
+    if tls_atexit.IMPL in imports:
+        probes.append(("tls-atexit", lambda: _count([tls_atexit.site(b, base) or {"status": ""}])))
+    if set3_nonfatal.SET3 in imports:
+        def set3():
+            loc = set3_nonfatal.Set3Nonfatal._locate(b)
+            if not loc:
+                return 0, 0
+            calls, _ = gates.refs(b, loc[0], loc[1], base)
+            nxt = [b.read(c + 5, 3) for c in calls]
+            return (sum(1 for x in nxt if x[:2] == set3_nonfatal.TEST and x[2] == 0x74),
+                    sum(1 for x in nxt if x[:2] == set3_nonfatal.TEST and x[2] == 0xEB))
+        probes.append(("set3-nonfatal", set3))
+    if any(m.startswith("libSceAudioOut2") for m in d.imports_by_module()):
+        def fb():
+            sc = frostbite_8ch.scan(b, base)
+            return (0, 0) if sc["unknown"] else _count(sc["sites"])
+        probes.append(("frostbite-8ch", fb))
+    out = []
+    for rule, fn in probes:
+        try:
+            u, f = fn()
+        except Exception:                                # noqa: BLE001 — a probe never breaks ingest
+            continue
+        if u or f:
+            out.append((rule, u, f))
+    return out
 
 
 def probe_kit(path, role: str) -> list[tuple[str, int, int, str]]:
@@ -66,6 +113,11 @@ def probe_kit(path, role: str) -> list[tuple[str, int, int, str]]:
         u, f = Wwise71.probe(b, base)
         if u or f:
             out.append(("wwise-71", u, f, sig))
+        from .. import dynamic
+        d = dynamic.parse(b)
+        if d:
+            for rule, u, f in probe_10c(b, base, d):
+                out.append((rule, u, f, sig))
     except Exception:                                    # noqa: BLE001 — a probe never breaks ingest
         pass
     return out

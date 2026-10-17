@@ -382,6 +382,15 @@ def cmd_kit(a) -> int:
             print("  PSML overlay provider: libScePsml loads /app0/k9.psp and k9.psp is kept (rule psml-overlay)")
         print(f"  evidence: {r['present']} present (at FW {r['present_fw']}), {r['absent']} absent (bound to stubs), "
               f"{r['plt_stubs']} PLT stub(s)")
+        if r.get("libc"):
+            print(f"  libc    : identity {r['libc']['identity'][:16]}…"
+                  + (f" (normalised: {'; '.join(r['libc']['notes'])})" if r['libc']['notes'] else ""))
+    elif a.kit_cmd == "reindex":
+        res = db.reindex(a.names or None)
+        for n, m in res.items():
+            print(f"{n:32} {m}")
+        if not res:
+            print("no kits")
     elif a.kit_cmd == "list":
         for k in db.kits():
             files = [f for f in db.kit_files(k.name) if f.role == "fakelib"]
@@ -413,6 +422,10 @@ def cmd_kit(a) -> int:
         print("\nchanged bytes by kind: " + ", ".join(f"{k} {v}" for k, v in sorted(totals.items())))
         print("  sdk / imports: done by every build;  plt-stub: --rule kit-stubs (after `kit add`);  "
               "mapflex: --rule mapflex-flags;  savedata: --rule savedata-mount;  wwise: --rule wwise-71")
+        named = sorted(k for k in totals if k not in ("sdk", "plt-stub", "imports", "mapflex", "savedata", "wwise",
+                                                      "game"))
+        if named:
+            print("  also explained by their rules (--rule NAME): " + ", ".join(f"{k} ({totals[k]} B)" for k in named))
         if totals.get("game"):
             print("  game: edits no generic rule explains (listed above) — each is a candidate for a new "
                   "rule; --recipe writes them as a recipe for this game only")
@@ -538,6 +551,8 @@ def main(argv: list[str] | None = None) -> int:
     ka.add_argument("--replace", action="store_true")
     ka.add_argument("--tested-fw", type=int, help="firmware the kit was actually run on, if not --fw "
                     "(its 'present' evidence is then recorded for that FW)")
+    kx = ks.add_parser("reindex", help="recompute the libc cross-check records from the stored kit data")
+    kx.add_argument("names", nargs="*", help="kit names (default: all)")
     kn = ks.add_parser("learn", help="explain a kit's edits; list the ones no generic rule covers")
     kn.add_argument("original", help="the original (un-backported) game dump")
     kn.add_argument("kit", help="the backport kit folder for the same game version")
