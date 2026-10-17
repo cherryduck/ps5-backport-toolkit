@@ -236,13 +236,21 @@ Technical details of each rule are in the [technical reference](#rule-details).
 **Easiest: live from the console.** Load `klogsrv` and `ftpsrv` with your payload loader (ps5bp
 doesn't include payloads). Then:
 
-- **App:** **Console** tab → enter the console's IP → optionally set the game folder and tick
+- **App:** **Console** tab → enter the console's IP → set *Game folder* (see below) and tick
   *Capture crash dumps* → *Start live log* → start the game on the console. When it crashes, ps5bp shows
   the diagnosis straight away and saves the crash as `crash-<time>.txt`.
 - **Command line:**
   ```
-  ps5bp console klog 192.168.1.50 --out log.txt --game /games/PPSA12345 --dumps dumps/
+  ps5bp console klog 192.168.1.50 --out log.txt --game /games/PPSA12345-backport --dumps dumps/
   ```
+
+**Which game folder?** A folder on your PC with the same files the console is running, so
+ps5bp can read the code at each step of the crash. Point it at **your backport's output folder**:
+- a `full` build is a complete copy, so it's used as it is;
+- an `overlay` build only holds the changed files. ps5bp reads those from the overlay and
+  everything else from the original dump, whose path is in the overlay's
+  `backport-report.json`, so every frame matches the console, fakelibs and patched code included;
+- someone else's backport: your local copy with that backport applied.
 
 Start this **before** launching the game. The console deletes its crash-dump folder as soon as
 you close the crash screen, so ps5bp copies it the moment it appears.
