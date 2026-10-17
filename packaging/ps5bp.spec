@@ -4,14 +4,15 @@
 # Build with scripts/build-bundle.sh.
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 ROOT = Path(SPECPATH).parent
 datas = collect_data_files("ps5bp") + collect_data_files("capstone")
 binaries = collect_dynamic_libs("capstone")
+# every ps5bp module: rules and helpers are imported lazily (rules.registry(), GUI tabs), so a
+# hand-kept list silently drops new ones from the bundle
 common = dict(pathex=[str(ROOT)], binaries=binaries, datas=datas,
-              hiddenimports=["ps5bp.core.rules.pro", "ps5bp.core.rules.pssr_memory",
-                             "ps5bp.core.rules.stub_absent", "ps5bp.core.rules.user_patch"],
+              hiddenimports=collect_submodules("ps5bp"),
               excludes=["tkinter", "pytest"])
 
 cli = Analysis([str(ROOT / "packaging/entry_cli.py")], **common)
