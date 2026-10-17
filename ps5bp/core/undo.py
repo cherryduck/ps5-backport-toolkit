@@ -6,6 +6,7 @@ stacked (an overlay copied over the game, then another).
 
   sdk / rule:* / retarget   bytes at offset must equal `new` -> written back to `old`
   param.json                "key": "new" -> "key": "old" (text, formatting kept)
+  extra                     a file a rule shipped (k9.psp) -> deleted (an overwritten one: <out>.originals/)
   fakelib                   installed by the build -> deleted (if the build replaced a
                             fakelib the game shipped itself, that file can't be restored
                             from the report: use <out>.originals/ if present)
@@ -66,19 +67,26 @@ def plan_undo(game: Path, reports: list[Path]) -> UndoPlan:
                 if rel in up.deletes:
                     up.deletes.remove(rel)
             for e in rep["edits"]:
-                if e["kind"] == "fakelib" and e["file"] not in have and (game / e["file"]).exists() \
+                if e["kind"] in ("fakelib", "extra") and e["file"] not in have and (game / e["file"]).exists() \
                         and e["file"] not in gone:
                     up.deletes.append(e["file"])
                     gone.add(e["file"])
                     cur.pop(e["file"], None)
             up.count += len(rep["edits"])
             continue
-        installed = {e["file"] for e in rep["edits"] if e["kind"] == "fakelib"}
-        older = {e["file"] for r in reps[n + 1:] for e in r["edits"] if e["kind"] == "fakelib"}
+        installed = {e["file"] for e in rep["edits"] if e["kind"] in ("fakelib", "extra")}
+        older = {e["file"] for r in reps[n + 1:] for e in r["edits"] if e["kind"] in ("fakelib", "extra")}
         for e in reversed(rep["edits"]):
             rel, kind = e["file"], e["kind"]
-            if rel in installed and kind != "fakelib":
+            if rel in installed and kind not in ("fakelib", "extra"):
                 continue                                    # whole file goes away anyway
+            if kind == "extra":                             # a file a rule added (k9.psp ...): deleted again
+                if (game / rel).exists() and rel not in gone:
+                    up.deletes.append(rel)
+                    gone.add(rel)
+                cur.pop(rel, None)
+                up.count += 1
+                continue
             if kind == "fakelib":
                 if "replaces the dump's" in e.get("note", "") and rel not in gone and rel not in older:
                     up.notes.append(f"{rel}: replaced a fakelib the game shipped — the original "

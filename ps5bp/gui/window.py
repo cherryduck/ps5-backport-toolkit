@@ -494,6 +494,8 @@ class MainWindow(QMainWindow):
                     warns.append(f"{m.module}: {m.status}" + (f" ({', '.join(m.absent[:4])})" if m.absent else ""))
             fill(self.cov_table, rows, colors)
             warns += cov.deps
+            from ..core.advice import ampr_advice
+            warns += ["advice: " + x for x in ampr_advice(gs, cov)]
         self.warn_list.clear()
         self.warn_list.addItems(warns or ["no warnings"])
         self._fill_rules(p.findings)
