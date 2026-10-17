@@ -905,9 +905,16 @@ class MainWindow(QMainWindow):
         gr = QHBoxLayout()
         gr.addWidget(QLabel("Game folder (to resolve crash backtraces; optional):"))
         self.con_game = QLineEdit(self.settings.value("console/game", ""))
-        self.con_game.setPlaceholderText("empty = use the game folder at the top")
+        self.con_game.setPlaceholderText("your backport output (overlay or full), or a game folder; empty = the game folder at the top")
+        self.con_game.setToolTip("A folder on this PC with the same files the console is running.\n"
+                                 "Best: the backport's output folder. For an overlay build, files the overlay\n"
+                                 "doesn't contain are read from the game folder it was built from\n"
+                                 "(named in its backport-report.json).")
         self.con_game.editingFinished.connect(lambda: self.settings.setValue("console/game", self.con_game.text().strip()))
         gr.addWidget(self.con_game, 1)
+        b = QPushButton("Browse…")
+        b.clicked.connect(lambda: self._con_pick(self.con_game, folder=True))
+        gr.addWidget(b)
         v.addLayout(gr)
         dr = QHBoxLayout()
         self.con_dump_on = QCheckBox("Capture crash dumps (FTP :2121) into:")
@@ -977,7 +984,9 @@ class MainWindow(QMainWindow):
         ip = self._con_host()
         if not ip or self.con_bridge is not None:
             return
-        game = self.con_game.text().strip() or (self.game_edit.text().strip() if (Path(self.game_edit.text().strip()) / "eboot.bin").is_file() else "")
+        from ..core.klog import has_game
+        top = self.game_edit.text().strip()
+        game = self.con_game.text().strip() or (top if top and has_game(Path(top).expanduser()) else "")
         flags = self.plan.scan.flags if self.plan else []
         dumps = Path(self.con_dump_dir.text().strip()).expanduser() if self.con_dump_on.isChecked() else None
         crash_dir = dumps if dumps else home() / "console"
@@ -1037,7 +1046,7 @@ class MainWindow(QMainWindow):
         t = klog.parse(self.klog_in.toPlainText())
         game = Path(self.game_edit.text()).expanduser()
         flags = self.plan.scan.flags if self.plan else []
-        if (game / "eboot.bin").is_file():
+        if klog.has_game(game):
             try:
                 klog.symbolize(t, game)
             except Exception as e:                       # noqa: BLE001

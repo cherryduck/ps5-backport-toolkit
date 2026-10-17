@@ -251,19 +251,65 @@ def _fn_start(read, addr: int, limit: int = 0x4000) -> int:
     return lo
 
 
+def game_layers(game: Path) -> list[Path]:
+    """Folders to read the running game's files from, first match wins.
+
+    A ps5bp overlay output holds only the files the backport changed (plus fakelib/); its
+    backport-report.json names the game folder it was built from, which supplies every
+    other file. So pointing at an overlay resolves each frame against exactly what the
+    console runs: changed files from the overlay, the rest from the original dump.
+    A full build or a plain game folder is used as it is."""
+    import json
+    layers = [game]
+    rp = game / "backport-report.json"
+    if rp.is_file():
+        try:
+            rep = json.loads(rp.read_text())
+        except (OSError, ValueError):
+            rep = {}
+        base = rep.get("game")
+        if rep.get("mode") == "overlay" and base and Path(base) != game:
+            layers.append(Path(base))
+    return layers
+
+
+def has_game(game: Path) -> bool:
+    """True when the folder (or the game behind an overlay) has an eboot.bin."""
+    return any((d / "eboot.bin").is_file() for d in game_layers(game))
+
+
 def symbolize(t: Triage, game: Path) -> None:
-    """Fill Frame.call / calls_in_fn for frames inside /app0/ binaries of `game`."""
+    """Fill Frame.call / calls_in_fn for frames inside /app0/ binaries of `game`
+    (a game folder, a full build, or an overlay build - see game_layers)."""
     from . import dynamic
     from .asm import plt_stubs
     from .binary import Binary
     from .nid import name_of
 
     cache: dict[str, tuple | None] = {}
+    layers = game_layers(Path(game))
+    if len(layers) > 1 and not layers[1].is_dir():
+        t.suggestions.append(f"overlay build: the game folder it was built from ({layers[1]}) is missing; "
+                             "only files inside the overlay can be resolved")
+
+    def find(rel: str) -> Path | None:
+        for d in layers:
+            p = d / rel
+            if p.is_file():
+                return p
+            try:                                       # dumps copied via exFAT/Windows can change case
+                from .ledger import resolve_member
+                q = d / resolve_member(d, rel)
+                if q.is_file():
+                    return q
+            except Exception:                          # noqa: BLE001 - ambiguous/missing: try next layer
+                pass
+        return None
 
     def load(rel: str):
         if rel not in cache:
-            p = game / rel
-            if not p.is_file():
+            p = find(rel)
+            if p is None:
                 cache[rel] = None
             else:
                 b = Binary.load(p)
