@@ -356,7 +356,7 @@ def cmd_rules(a) -> int:
     from .core.recipe import builtin
     from .core.rules import registry
     for r in registry().values():
-        print(f"{r.name:12} {'on ' if r.default else 'off'}  {r.summary}"
+        print(f"{r.name:18} {'on ' if r.default else 'off'}  {r.summary}"
               + (f"  [conflicts: {', '.join(r.conflicts)}]" if r.conflicts else ""))
     rs = builtin()
     if rs:

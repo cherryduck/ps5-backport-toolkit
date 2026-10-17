@@ -237,6 +237,24 @@ class Binary:
         self._seg[idx] = (off, size + len(code))
         return cave
 
+    # ---- SELF extended info -------------------------------------------------
+    def ex_info(self) -> dict | None:
+        """EX_INFO block of a SELF: it follows the ELF header + program header copy (16-aligned).
+        {offset, paid, ptype, app_version, fw_version, digest}; None for a plain ELF.
+
+        The 32-byte digest is content-dependent (a fake-signed libc whose only difference is a
+        4-byte code edit carries a different one) but its algorithm is not recoverable from the
+        SELF alone: it is not SHA-256 of any file range, segment subset or ELF image rebuilt from
+        the SELF. ps5bp edits leave it as it was in the input; see README (\"SELF digest\")."""
+        if self.kind != "self":
+            return None
+        o = (self.elf_off + self.phoff + len(self.phdrs) * 56 + 15) & ~15
+        if o + 0x40 > len(self.data):
+            return None
+        paid, ptype, app, fw = struct.unpack_from("<QQQQ", self.data, o)
+        return {"offset": o, "paid": paid, "ptype": ptype, "app_version": app, "fw_version": fw,
+                "digest": bytes(self.data[o + 0x20:o + 0x40])}
+
     # ---- conversion ---------------------------------------------------
     def to_elf(self) -> bytes:
         """Plain ELF image (segments at their p_offset)."""
