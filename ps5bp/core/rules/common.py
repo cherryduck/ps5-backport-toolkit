@@ -1,9 +1,11 @@
 """Shared helpers for rules: import stubs, symbol localisation."""
 from __future__ import annotations
 
+import re
 import struct
+from dataclasses import dataclass
 
-from ..asm import is_plt_entry, plt_stubs, stub_for
+from ..asm import is_plt_entry, plt_entries, plt_stubs, stub_for
 from ..binary import Binary
 from .. import dynamic
 
@@ -55,3 +57,55 @@ def proven_absent(ctx, module: str, nid: str) -> bool:
         return False
     m = next((m for m in ctx.cov.modules if m.module == module), None)
     return bool(m) and nid in m.absent
+
+
+@dataclass
+class Slot:
+    idx: int
+    got: int
+    sym: int
+    name: str
+    nid: str
+    va: int
+    entry: bytes
+
+
+def jump_slots(b: Binary, d: dynamic.Dynamic) -> list[Slot]:
+    ents = plt_entries(b, d, 0)
+    t = d.tags
+    rel = b.read(t[dynamic.DT_JMPREL][0], t[dynamic.DT_PLTRELSZ][0])
+    out = []
+    for i, ((r_off, r_info, _), (name, va, e)) in enumerate(zip(struct.iter_unpack("<QQq", rel[:len(rel) // 24 * 24]), ents)):
+        out.append(Slot(i, r_off, r_info >> 32, name, name.split("#")[0], va, e))
+    return out
+
+
+def int3_runs(b: Binary, avoid: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """(rva, length) of usable int3 padding in executable segments (first byte of a run left alone)."""
+    runs = []
+    for p in b.loads():
+        if not p.is_exec:
+            continue
+        seg = b.segment_bytes(p)
+        for m in re.finditer(rb"\xcc{9,}", seg):
+            lo, hi = p.vaddr + m.start() + 1, p.vaddr + m.end()
+            if any(a < hi and lo < e for a, e in avoid):
+                continue
+            runs.append((lo, hi - lo))
+    return runs
+
+
+def allocate_runs(runs: list[tuple[int, int]], sizes: dict[str, int]) -> dict[str, int] | None:
+    free = [[a, n] for a, n in runs]
+    at: dict[str, int] = {}
+    for name in sorted(sizes, key=lambda k: -sizes[k]):
+        fit = [r for r in free if r[1] >= sizes[name]]
+        if not fit:
+            return None
+        r = min(fit, key=lambda r: r[1])               # best fit
+        at[name] = r[0]
+        r[0] += sizes[name]
+        r[1] -= sizes[name]
+    return at
+
+

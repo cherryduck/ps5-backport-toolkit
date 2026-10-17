@@ -36,6 +36,9 @@ class RuleContext:
     load: Callable[[str], Binary]                 # working copy of a game-relative file
     edit: Callable[..., None]                     # edit(file, kind, offset, old, new, note)
     options: dict = field(default_factory=dict)   # rule-specific (e.g. user-patch paths)
+    # add_file(rel, src, note): ship a non-binary file (e.g. k9.psp) at a game-relative path; the
+    # pipeline copies it, records an `extra` edit and checks its hash. None where nothing is written.
+    add_file: Callable[..., None] | None = None
 
     @property
     def declared_sdk(self) -> int:
@@ -70,8 +73,11 @@ def registry() -> dict[str, Rule]:
     from .mapflex_flags import MapflexFlags
     from .savedata_mount import SavedataMount
     from .wwise71 import Wwise71
+    from .sync_umtx import SyncUmtx
+    from .trinity_hw_gate import TrinityHwGate
+    from .psml_overlay import PsmlOverlay
     rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), KitStubs(), MapflexFlags(), StubAbsent(),
-             UserPatch()]
+             SyncUmtx(), TrinityHwGate(), PsmlOverlay(), UserPatch()]
     return {r.name: r for r in rules}
 
 

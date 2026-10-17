@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -627,9 +628,19 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         active = {r.name: r for r in resolve(enabled, set(opts.no_rules))}
     except ValueError as e:
         raise BuildError(str(e)) from None
+    extra_files: dict[str, Path] = {}                         # rel -> source file (rules' add_file)
+
+    def add_file(rel: str, src: Path | str, note: str = "", kind: str = "extra") -> None:
+        src = Path(src)
+        if rel in extra_files and extra_files[rel] != src:
+            raise ValueError(f"{rel}: two different files requested")
+        if rel in extra_files:
+            return
+        extra_files[rel] = src
+        rep.edits.append(Edit(rel, kind, -1, hashlib.sha256(src.read_bytes()).hexdigest(), src.name, note))
     ctx = RuleContext(gs, cov, opts.target, load=lambda rel: get(rel, game / rel),
                       edit=lambda file, kind, off, old, new, note="": rep.edits.append(
-                          Edit(file, kind, off, old, new, note)),
+                          Edit(file, kind, off, old, new, note)), add_file=add_file,
                       options={"patches": patches, "enabled": set(active), "stubs_from": opts.stubs_from,
                                "db": db})
     for f in detect_all(ctx):
@@ -719,7 +730,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         # an overlay is meant to be copied over the game: keep what it would overwrite / what
         # must be deleted, beside it (not inside: it would end up in the game folder)
         odir = out.parent / (out.name + ".originals")
-        keep = list(outputs) + ([pj_rel] if pj_new is not None else []) + remove
+        keep = list(outputs) + ([pj_rel] if pj_new is not None else []) + remove + list(extra_files)
         saved = 0
         for rel in keep:
             if (game / rel).is_file() and not (odir / rel).exists():
@@ -734,7 +745,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         for k, src in enumerate(files):
             prog("copy", k, len(files))
             rel = str(src.relative_to(game))
-            if rel in outputs or (rel == pj_rel and pj_new is not None) or rel in remove:
+            if rel in outputs or (rel == pj_rel and pj_new is not None) or rel in remove or rel in extra_files:
                 continue
             stats[clone_file(src, out / rel)] += 1
         log(f"cloned {stats['reflink']} file(s) by reflink, copied {stats['copy']}")
@@ -757,6 +768,14 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                 log(f"moved aside {rel} -> {bak.name}")
     if remove and opts.mode != "overlay":
         rep.edits += [Edit(rel, "removed", -1, "", "", "superseded / stale after Ampr replacement") for rel in remove]
+    for rel, src in extra_files.items():
+        dst = out / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if opts.mode == "inplace" and dst.exists():
+            bak = dst.with_name(dst.name + ".orig")
+            if not bak.exists():
+                os.replace(dst, bak)
+        clone_file(src, dst)
     if pj_new is not None:
         dst = out / pj_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -784,6 +803,9 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         if stray:
             problems.append(f"{rel}: unexpected changes at " + ", ".join(f"{s:#x}+{n:#x}" for s, n in stray[:5]))
         rep.verified.append(rel)
+    for rel, src in extra_files.items():
+        if (out / rel).read_bytes() != src.read_bytes():
+            problems.append(f"{rel}: differs from its source {src}")
     if pj_new is not None:
         try:
             json.loads((out / pj_rel).read_bytes().decode("utf-8-sig"))
@@ -829,6 +851,7 @@ def plan(game: Path | str, target: int, db: EvidenceDB | None = None, patches: l
     findings = []
     if gs.eboot and not any(b.error for b in gs.binaries if b.role != "fakelib"):
         ctx = RuleContext(gs, cov, target, load=file_loader(game), edit=lambda *a, **k: None,
+                          add_file=lambda *a, **k: None,
                           options={"patches": list(patches or []), "db": db})
         findings = detect_all(ctx)
     return Plan(gs, cov, findings)

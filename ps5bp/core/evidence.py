@@ -230,7 +230,10 @@ class EvidenceDB:
                               [(fw, mod, n, name, i.path) for n in nids])
                 n_absent += len(nids)
         self.db.commit()
-        return {"name": name, "fw": fw, "root": str(root), "title_id": title_id,
+        overlay = any(i.role == "fakelib" and i.module.startswith("libScePsml")
+                      and self.OVERLAY_MARK in (store / i.path).read_bytes() for i in infos) \
+            and (store / "k9.psp").is_file()
+        return {"name": name, "fw": fw, "root": str(root), "title_id": title_id, "psml_overlay": overlay,
                 "fakelibs": sorted(i.path for i in infos if i.role == "fakelib"),
                 "extras": [p.name for p in extras], "present": n_present, "absent": n_absent,
                 "plt_stubs": n_stubs, "present_fw": present_fw}
@@ -268,6 +271,24 @@ class EvidenceDB:
             if f.role == "fakelib" and f.module == module and f.kit in kits:
                 rows = self.db.execute("SELECT nid FROM exports WHERE kit=? AND relpath=?", (f.kit, f.relpath))
                 out.append((kits[f.kit], f, {r[0] for r in rows}))
+        return out
+
+    OVERLAY_MARK = b"/app0/k9.psp"
+
+    def psml_overlays(self) -> list[tuple[Kit, KitFile, Path, set[str]]]:
+        """Overlay providers: a kit's libScePsml fakelib whose data names `/app0/k9.psp`, together
+        with a k9.psp kept from the same kit's root. [(kit, fakelib, k9.psp path, exported NIDs)]"""
+        out = []
+        for kit, f, exports in (c for m in {f.module for f in self.kit_files()
+                                            if f.role == "fakelib" and f.module.startswith("libScePsml")}
+                                for c in self.fakelib_candidates(m)):
+            k9 = kit.path("k9.psp")
+            try:
+                data = kit.path(f.relpath).read_bytes()
+            except OSError:
+                continue
+            if k9.is_file() and self.OVERLAY_MARK in data:
+                out.append((kit, f, k9, exports))
         return out
 
     def exports_of(self, kit: str, relpath: str) -> set[str]:
