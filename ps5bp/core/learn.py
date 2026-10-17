@@ -8,6 +8,18 @@ Changes the toolkit already makes on its own are classified and left out:
   mapflex   `mov ecx,0x8000` at the retargeted libc call          (rule mapflex-flags)
   savedata  sceSaveDataMount3 param +0x18 -1 -> 0                 (rule savedata-mount)
   wwise     AkChannelConfig 7.1.4 -> 7.1                          (rule wwise-71)
+and, from the phase-10c rules (see learn_rules.py; classified only when the kit's bytes equal what
+the rule writes, or for cave code, structurally):
+  compat-stubs     GOT seeds: lazy slot -> int3 cave holding the contract stub
+  set3-nonfatal    `test eax,eax; je` -> `jmp` after sceAudioOut2Set3DLatency
+  gamepresets-28   GetGamePresets request size 0x30 -> 0x28 (direct and init-helper form)
+  savedata         savedata-mount incl. local wrappers and the Unity SaveData vector copy
+  savedata-prepare / savedata-dirsearch   prepare mode -> 0; Search2 rename / GOT forward
+  frostbite-8ch    EA AudioOut2 12 -> 8 channel set-up
+  tls-atexit       libc __cxa_thread_atexit -> local __cxa_atexit
+  sync-umtx        SyncOnAddress -> _umtx_op renames, PLT shims, anchor GOT and caves
+  trinity-hw-gate  IsTrinityMode -> HasTrinityMode, return-0 seed, derived OperationMode / AGC bodies
+  psml-overlay     (file level) a fakelib libScePsml naming /app0/k9.psp plus the kit's root k9.psp
 Everything else is unexplained: reported as a candidate for a new generic rule (with what
 the bytes feed: an import's argument, a constant, data). A per-game recipe is written only
 when asked for (`--recipe`): it helps that one game, a generic rule helps every game. Edits inside executable segments get byte-signature
@@ -84,6 +96,10 @@ def _explained(ob: Binary, nb: Binary, base: int) -> list[tuple[int, int, str]]:
     return out
 
 
+def _class_at(expl: list[tuple[int, int, str]], va0: int, va1: int) -> str | None:
+    return next((c for a, z, c in expl if a <= va0 and va1 <= z), None)
+
+
 def learn_file(orig: Path, kit: Path, rel: str, title_id: str, scanner_cache: dict) -> tuple[FileReport, dict | None]:
     rep = FileReport(rel)
     ob, nb = Binary.load(orig), Binary.load(kit)
@@ -95,25 +111,54 @@ def learn_file(orig: Path, kit: Path, rel: str, title_id: str, scanner_cache: di
     ea, eb = ob.to_elf()[:0x40], nb.to_elf()[:0x40]
     if ea != eb:
         rep.header_only = [f"ELF header +{s:#x}: {ea[s:e].hex()} -> {eb[s:e].hex()}" for s, e in _regions(ea, eb, 0)]
-    expl = _explained(ob, nb, base)
+    from .learn_rules import explain
+    try:
+        root = orig.parents[len(Path(rel).parts) - 1]
+        shadow = explain(orig, root, rel, ob, nb, base)
+    except Exception:                                   # noqa: BLE001 — rule matching never breaks learn
+        from .learn_rules import Shadow
+        shadow = Shadow()
+    expl = shadow.explained() + _explained(ob, nb, base)      # rule-exact ranges first, generic classes after
     ops: list[dict] = []
     anchors: list[dict] = []
     for po, pn in zip(lo, ln):
         sa, sb = ob.segment_bytes(po), nb.segment_bytes(pn)
         for s, e in _regions(sa, sb):
             va0, va1 = base + po.vaddr + s, base + po.vaddr + e
-            cls = next((c for a, z, c in expl if a <= va0 and va1 <= z), None)
+            cls = _class_at(expl, va0, va1)
             if cls:
                 rep.classes[cls] = rep.classes.get(cls, 0) + (e - s)
                 continue
-            rep.classes["game"] = rep.classes.get("game", 0) + (e - s)
-            op = {"va": f"{va0:#x}", "old": sa[s:e].hex(), "new": sb[s:e].hex()}
-            if po.is_exec:
-                op, anc = _anchored(ob, base, va0, op, len(anchors), scanner_cache)
-                if anc:
-                    anchors.append(anc)
-            op["note"] = _describe(ob, nb, base, va0, va1, po.is_exec, scanner_cache)
-            ops.append(op)
+            # a region can straddle two explained ranges (or an explained one and a real game edit):
+            # classify byte by byte, keep the rest as the unexplained region(s)
+            rest = []
+            for i in range(s, e):
+                if sa[i] == sb[i]:
+                    continue
+                c = _class_at(expl, base + po.vaddr + i, base + po.vaddr + i + 1)
+                if c:
+                    rep.classes[c] = rep.classes.get(c, 0) + 1
+                else:
+                    rest.append(i)
+            groups: list[list[int]] = []
+            for i in rest:
+                if groups and i - groups[-1][1] <= 4:
+                    groups[-1][1] = i + 1
+                else:
+                    groups.append([i, i + 1])
+            for gs_, ge in groups:
+                va0, va1 = base + po.vaddr + gs_, base + po.vaddr + ge
+                rep.classes["game"] = rep.classes.get("game", 0) + (ge - gs_)
+                op = {"va": f"{va0:#x}", "old": sa[gs_:ge].hex(), "new": sb[gs_:ge].hex()}
+                if po.is_exec:
+                    op, anc = _anchored(ob, base, va0, op, len(anchors), scanner_cache)
+                    if anc:
+                        anchors.append(anc)
+                op["note"] = _describe(ob, nb, base, va0, va1, po.is_exec, scanner_cache)
+                miss = shadow.near_miss(va0, va1)
+                if miss:
+                    op["note"] += f"   [{miss}]"
+                ops.append(op)
     rep.edits = ops
     if not ops:
         return rep, None
@@ -180,4 +225,24 @@ def learn(original: Path, kit: Path, title_id: str = "") -> tuple[list[FileRepor
         reps.append(r)
         if rec:
             recipes.append(rec)
+    reps += _psml_overlay(original, root)
     return reps, recipes
+
+
+def _psml_overlay(original: Path, root: Path) -> list[FileReport]:
+    """File-level psml-overlay: the kit's libScePsml fakelib names /app0/k9.psp and the kit root has the k9.psp."""
+    from .rules.psml_overlay import MARK
+    k9 = root / "k9.psp"
+    if not k9.is_file():
+        return []
+    out = []
+    for p in sorted((root / "fakelib").glob("libScePsml*")) if (root / "fakelib").is_dir() else []:
+        try:
+            if MARK in p.read_bytes():
+                rel = p.relative_to(root).as_posix()
+                out.append(FileReport(rel, classes={"psml-overlay": p.stat().st_size}))
+        except OSError:
+            continue
+    if out and not ((original / "k9.psp").is_file() and (original / "k9.psp").read_bytes() == k9.read_bytes()):
+        out.append(FileReport("k9.psp", classes={"psml-overlay": k9.stat().st_size}))
+    return out

@@ -110,6 +110,7 @@ class BuildReport:
     sibling_edits: list[dict] = field(default_factory=list)   # sibling reports: changes vs the parent
     inputs: dict[str, str] = field(default_factory=dict)      # rel -> sha256 of the game's binaries/param.json/fakelib at build start
     outputs: dict[str, str] = field(default_factory=dict)     # rel -> sha256 of every file this build wrote
+    libc_check: dict = field(default_factory=dict)            # 10d: output libc vs kit libcs of the same identity (report only)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1, default=str)
@@ -146,6 +147,9 @@ class BuildReport:
                 L.append(f"   [{state:11}] {f['rule']:12} {f['title']}" + (f" — {f['reason']}" if f["reason"] else ""))
         if self.fakelibs:
             L += ["", "fakelibs:"] + [f"   {x['file']}  from {x['kit']} (FW{x['kit_fw']})" for x in self.fakelibs]
+        if self.libc_check:
+            from . import libcid
+            L += libcid.format_text(self.libc_check)
         if self.warnings:
             L += ["", "warnings:"] + [f"   {w}" for w in self.warnings]
         if self.memfix_trial is not None:
@@ -727,6 +731,15 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                                                    if stale_index else ""))
 
     outputs = {rel: (b, raw, b.writes) for rel, (b, raw) in working.items() if b.writes or rel in forced}
+
+    # 3c. libc cross-check against the kits' libcs (10d): a report only, never changes the build
+    from . import libcid
+    lrel = next((r for r in working if libcid.is_libc(r)), None)
+    if lrel and db is not None:
+        try:
+            rep.libc_check = libcid.crosscheck(db, lrel, working[lrel][0], rep.edits) or {}
+        except Exception as e:                                # noqa: BLE001 — never fail a build for a report
+            rep.warnings.append(f"libc cross-check skipped: {e}")
 
     # 4. param.json
     pj_new: bytes | None = None

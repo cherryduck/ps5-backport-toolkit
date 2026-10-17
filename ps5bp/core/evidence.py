@@ -28,6 +28,7 @@ absent on FW X  => absent on every FW <= X.
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 import shutil
@@ -37,6 +38,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import libcid
+from .libcid import LIBC_REL, LibcRecord
 from .scan import BinaryInfo, is_loading_layer, iter_binaries, scan_binary
 
 SYSTEM_MODULE = re.compile(r"^(libkernel|libSce\w*)$")
@@ -53,6 +56,8 @@ CREATE TABLE IF NOT EXISTS files (kit TEXT, relpath TEXT, role TEXT, module TEXT
 CREATE TABLE IF NOT EXISTS exports (kit TEXT, relpath TEXT, module TEXT, nid TEXT);
 CREATE TABLE IF NOT EXISTS evidence (fw INTEGER, module TEXT, nid TEXT, present INTEGER,
     kit TEXT, via TEXT);
+CREATE TABLE IF NOT EXISTS libcs (kit TEXT PRIMARY KEY, relpath TEXT, file_sha TEXT, elf_sha TEXT, size INTEGER,
+    identity TEXT, notes TEXT);
 CREATE INDEX IF NOT EXISTS ev_idx ON evidence (module, nid);
 CREATE INDEX IF NOT EXISTS ex_idx ON exports (module, nid);
 """
@@ -133,7 +138,7 @@ class EvidenceDB:
         k = self.kit(name)
         if not k:
             return False
-        for t in ("kits", "files", "exports", "evidence", "stubs", "rule_obs"):
+        for t in ("kits", "files", "exports", "evidence", "stubs", "rule_obs", "libcs"):
             col = "name" if t == "kits" else "kit"
             self.db.execute(f"DELETE FROM {t} WHERE {col}=?", (name,))
         self.db.commit()
@@ -189,6 +194,11 @@ class EvidenceDB:
         extras = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in EXTRA_EXTS]
         for p in extras:
             shutil.copy2(p, store / p.name)
+        libc_src = root / LIBC_REL                          # kept (small) for the 10d libc cross-check
+        libc = None
+        if libc_src.is_file():
+            (store / LIBC_REL).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(libc_src, store / LIBC_REL)
         replaced = {i.module for i in infos if i.role == "fakelib"}
         game_mods = {i.module for i in infos if i.role != "fakelib"}
         c = self.db.cursor()
@@ -230,13 +240,57 @@ class EvidenceDB:
                               [(fw, mod, n, name, i.path) for n in nids])
                 n_absent += len(nids)
         self.db.commit()
+        if libc_src.is_file():
+            libc = self.record_libc(name)
         overlay = any(i.role == "fakelib" and i.module.startswith("libScePsml")
                       and self.OVERLAY_MARK in (store / i.path).read_bytes() for i in infos) \
             and (store / "k9.psp").is_file()
         return {"name": name, "fw": fw, "root": str(root), "title_id": title_id, "psml_overlay": overlay,
                 "fakelibs": sorted(i.path for i in infos if i.role == "fakelib"),
                 "extras": [p.name for p in extras], "present": n_present, "absent": n_absent,
-                "plt_stubs": n_stubs, "present_fw": present_fw}
+                "plt_stubs": n_stubs, "present_fw": present_fw,
+                "libc": ({"identity": libc.identity, "elf_sha256": libc.elf_sha, "notes": libc.notes}
+                         if libc else None)}
+
+    # ---- libc cross-check (10d) ----------------------------------------
+    def libc_path(self, kit: str) -> Path | None:
+        k = self.kit(kit)
+        p = k.path(LIBC_REL) if k else None
+        return p if p and p.is_file() else None
+
+    def record_libc(self, kit: str) -> LibcRecord | None:
+        """(Re)compute the libc record of a kit from its stored libc.prx; None if not stored."""
+        p = self.libc_path(kit)
+        if p is None:
+            return None
+        rec = libcid.record_for(kit, p)
+        self.db.execute("DELETE FROM libcs WHERE kit=?", (kit,))
+        self.db.execute("INSERT INTO libcs VALUES (?,?,?,?,?,?,?)",
+                        (kit, rec.relpath, rec.file_sha, rec.elf_sha, rec.size, rec.identity,
+                         json.dumps(rec.notes)))
+        self.db.commit()
+        return rec
+
+    def libc_records(self) -> list[LibcRecord]:
+        rows = self.db.execute("SELECT kit, relpath, file_sha, elf_sha, size, identity, notes FROM libcs "
+                               "ORDER BY kit")
+        return [LibcRecord(k, r, f, e, n, i, json.loads(no or "[]")) for k, r, f, e, n, i, no in rows]
+
+    def reindex(self, names: list[str] | None = None) -> dict[str, str]:
+        """Recompute the libc record of every (named) kit from stored data. {kit: 'ok ...' | reason}."""
+        out = {}
+        for k in self.kits():
+            if names and k.name not in names:
+                continue
+            try:
+                rec = self.record_libc(k.name)
+            except Exception as e:                             # noqa: BLE001
+                out[k.name] = f"failed: {e}"
+                continue
+            out[k.name] = (f"ok identity {rec.identity[:12]}" if rec else
+                           "no libc stored for this kit (it predates 10d, or has none) — "
+                           "`ps5bp kit add ... --replace` it again to record one")
+        return out
 
     # ---- queries --------------------------------------------------------
     def present(self, module: str, target: int) -> set[str]:
