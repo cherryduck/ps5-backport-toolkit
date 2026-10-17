@@ -70,7 +70,13 @@ def registry() -> dict[str, Rule]:
     from .mapflex_flags import MapflexFlags
     from .savedata_mount import SavedataMount
     from .wwise71 import Wwise71
-    rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), KitStubs(), MapflexFlags(), StubAbsent(),
+    from .gamepresets import GamePresets28
+    from .tls_atexit import TlsAtexit
+    from .savedata_prepare import SavedataPrepare
+    from .savedata_dirsearch import SavedataDirSearch
+    from .frostbite_8ch import Frostbite8ch
+    rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), GamePresets28(), TlsAtexit(),
+             SavedataPrepare(), SavedataDirSearch(), Frostbite8ch(), KitStubs(), MapflexFlags(), StubAbsent(),
              UserPatch()]
     return {r.name: r for r in rules}
 

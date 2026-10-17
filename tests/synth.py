@@ -29,6 +29,7 @@ class Spec:
     imports: list[tuple[str, int]] = field(default_factory=lambda: [("rTXw65xmLIA", 0), ("uMei1W9uyNo", 1)])
     export_libs: list[str] = field(default_factory=list)
     exports: list[tuple[str, int]] = field(default_factory=list)     # (nid, export-lib index)
+    export_values: list[int] | None = None                            # rva per export (default 0x10 + i)
     stubbed: list[tuple[str, int]] = field(default_factory=list)     # (nid, import-lib index): bound to a local stub
     text: bytes = b"\x55\x48\x89\xe5\x31\xc0\x5d\xc3" + b"\xcc" * 8
     strings: bytes = b""
@@ -57,7 +58,8 @@ def build_elf(s: Spec) -> tuple[bytes, dict]:
         syms.append((add(f"{nid_}#{b64id(lib)}#{b64id(lib + 1)}"), 0x12, 0, 0))
     nimp = len(s.import_libs)
     for i, (nid_, lib) in enumerate(s.exports):
-        syms.append((add(f"{nid_}#{b64id(nimp + lib)}#{b64id(0)}"), 0x12, 1, 0x10 + i))
+        syms.append((add(f"{nid_}#{b64id(nimp + lib)}#{b64id(0)}"), 0x12, 1,
+                     s.export_values[i] if s.export_values else 0x10 + i))
     for nid_, lib in s.stubbed:
         syms.append((add(f"{nid_}#{b64id(lib)}#{b64id(lib + 1)}"), 0x12, 1, 0x80))
     # data segment layout
