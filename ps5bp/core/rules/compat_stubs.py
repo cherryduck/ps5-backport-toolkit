@@ -15,7 +15,8 @@ also overrides the evidence/lead decision (never a gate). Status per site: PATCH
 already points at the stub) / UNKNOWN (refused: reason given). Off by default; nothing is
 recommended without a recorded console result (`hw_proved` in the table).
 
-Skipped: NIDs owned by an enabled pro-disable / pssr-memory (Pro query, Trinity) or kit-stubs.
+Skipped: NIDs owned by an enabled pro-disable / pssr-memory (Pro query, Trinity), trinity-hw-gate
+(Is/HasTrinityMode) or kit-stubs.
 `--seed-plt-fallback` allows the PLT-overwrite stub for sites where a GOT seed is refused.
 """
 from __future__ import annotations
@@ -27,6 +28,8 @@ from . import contracts, gates, got_seed
 from .common import proven_absent, stub_plt, localize
 
 PRO_OWNED = {"NH6xARDOVv8", "tU5e3f9gSiU"}
+# trinity-hw-gate renames IsTrinityMode -> HasTrinityMode and seeds HasTrinityMode itself
+TRINITY_GATE_OWNED = {"tU5e3f9gSiU", "yu17wG8L5FI"}
 
 
 class CompatStubs(Rule):
@@ -54,6 +57,8 @@ class CompatStubs(Rule):
                     if c.gate == "manual" and not forced:
                         continue
                     if n in PRO_OWNED and pro_on:
+                        continue
+                    if n in TRINITY_GATE_OWNED and "trinity-hw-gate" in enabled:
                         continue
                     if n in kit_owned.get(mod, ()):
                         continue
