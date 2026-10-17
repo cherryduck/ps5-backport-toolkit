@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 from pathlib import Path
 
 from . import __version__
@@ -218,11 +219,96 @@ def cmd_klog(a) -> int:
     return 0 if t.crashes else 3
 
 
+def cmd_console(a) -> int:
+    from .core import console
+    if a.con_cmd == "send":
+        try:
+            n = console.send_payload(a.host, a.file, a.port)
+        except (OSError, ValueError) as e:
+            print(f"send failed: {e}", file=sys.stderr)
+            return 1
+        print(f"sent {n} bytes of {a.file} to {a.host}:{a.port}")
+        return 0
+    stop = threading.Event()
+    lock = threading.Lock()
+
+    def say(msg: str) -> None:
+        with lock:
+            print(msg, flush=True)
+
+    watcher = None
+    if a.con_cmd == "dumps" or a.dumps:
+        out = Path(a.out if a.con_cmd == "dumps" else a.dumps)
+        watcher = console.CoreDumpWatcher(
+            a.host, out, port=a.ftp_port, on_event=lambda m: say(f"[dumps] {m}"),
+            on_captured=lambda c: say(f"[dumps] captured {c.folder}: " + ", ".join(p.name for p in c.files)
+                                      + ("" if c.complete else "  (incomplete)")))
+        watcher.start()
+    if a.con_cmd == "dumps":
+        try:
+            while not stop.wait(0.5):
+                pass
+        except KeyboardInterrupt:
+            pass
+        watcher.stop()
+        watcher.join(5)
+        return 0
+
+    # klog
+    logf = open(a.out, "a", buffering=1, encoding="utf-8") if a.out else None
+    crash_dir = Path(a.out).resolve().parent if a.out else Path(".")
+    flags: list[str] = []
+    if a.game:
+        flags = scan_game(Path(a.game)).flags
+    det = console.CrashDetector()
+    crashes = []
+
+    def on_line(ln: str) -> None:
+        with lock:
+            print(ln, flush=True)
+            if logf:
+                logf.write(ln + "\n")
+        if watcher and console.DUMP_ANNOUNCE.search(ln):
+            watcher.wake()
+        block = det.feed(ln)
+        if block:
+            saved = console.save_crash(block, crash_dir)
+            say("\n==== crash detected ====\n" + console.triage_text(block, a.game, flags)
+                + f"crash block saved to {saved}\n========================")
+            crashes.append(saved)
+            if a.exit_after_crash:
+                stop.set()
+
+    ks = console.KlogStream(a.host, a.port, on_line=on_line, on_status=lambda m: say(f"[klog] {m}"))
+    ks.start()
+    try:
+        while not stop.wait(0.2):
+            pass
+    except KeyboardInterrupt:
+        pass
+    ks.stop()
+    ks.join(5)
+    if watcher:
+        watcher.stop()
+        watcher.join(5)
+    if logf:
+        logf.close()
+    return 0
+
+
 def cmd_memfix(a) -> int:
     from .core import memfix
     game = Path(a.game)
     gs = scan_game(game)
     tid = gs.title_id
+    if a.from_console:
+        from .core import console
+        src = console.latest_crash(a.from_console)
+        if src is None:
+            print(f"no crash-*.txt in {a.from_console}", file=sys.stderr)
+            return 2
+        print(f"using crash log {src}")
+        a.klog = str(src)
     kt = Path(a.klog).read_text(errors="replace") if a.klog else None
     if a.result is not None:
         if a.outcome not in ("works", "crash"):
@@ -389,6 +475,8 @@ def main(argv: list[str] | None = None) -> int:
     mf = sub.add_parser("memfix", help="find failing memory allocations, generate fixes, track console trials")
     mf.add_argument("game")
     mf.add_argument("--klog", help="crash log: ranks sites on the crash path first")
+    mf.add_argument("--from-console", metavar="DIR_OR_FILE",
+                    help="crash log saved by `ps5bp console klog`: a crash-*.txt, or a folder (newest is used); like --klog")
     mf.add_argument("--file", default="eboot.bin")
     mf.add_argument("--all", action="store_true", help="list every allocation site")
     mf.add_argument("--trials", action="store_true", help="list recorded trials for this title")
@@ -404,6 +492,25 @@ def main(argv: list[str] | None = None) -> int:
     kl.add_argument("log", help="klog text file, or - for stdin")
     kl.add_argument("--game", help="game folder the log is from (resolves backtrace calls)")
     kl.set_defaults(func=cmd_klog)
+    co = sub.add_parser("console", help="talk to the console: send a payload, live klog, crash-dump capture")
+    cs = co.add_subparsers(dest="con_cmd", required=True)
+    c1 = cs.add_parser("send", help="send an ELF to the loader (port 9021)")
+    c1.add_argument("host", metavar="IP")
+    c1.add_argument("file", help="payload .elf (you supply it; never bundled)")
+    c1.add_argument("--port", type=int, default=9021)
+    c2 = cs.add_parser("klog", help="stream klog (port 3232); triage crashes as they happen")
+    c2.add_argument("host", metavar="IP")
+    c2.add_argument("--port", type=int, default=3232)
+    c2.add_argument("--out", help="append the stream to this file; crash blocks go to crash-<time>.txt beside it")
+    c2.add_argument("--game", help="game folder: symbolize the crash backtrace")
+    c2.add_argument("--dumps", metavar="DIR", help="also capture crash dumps over FTP into DIR")
+    c2.add_argument("--ftp-port", type=int, default=2121)
+    c2.add_argument("--exit-after-crash", action="store_true", help="stop after the first detected crash")
+    c3 = cs.add_parser("dumps", help="download new crash-dump folders over FTP (port 2121)")
+    c3.add_argument("host", metavar="IP")
+    c3.add_argument("--out", required=True, metavar="DIR")
+    c3.add_argument("--ftp-port", "--port", dest="ftp_port", type=int, default=2121)
+    co.set_defaults(func=cmd_console)
     gu = sub.add_parser("gui", help="open the graphical interface")
     gu.set_defaults(func=lambda a: __import__("ps5bp.gui", fromlist=["main"]).main())
     rl = sub.add_parser("rules", help="list fix rules")
