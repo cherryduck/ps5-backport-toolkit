@@ -168,3 +168,20 @@ def test_gui_target_list_console_fw_and_also(win, game, tmp_path):
     win.also_edit.setText("5")
     win.mode.setCurrentIndex(win.mode.findData("inplace"))
     assert not win.also_edit.isEnabled() and win.build_options().also_targets == []
+
+
+def test_console_tab_constructs(win):
+    from PyQt6.QtWidgets import QApplication
+    names = [win.tabs.tabText(i) for i in range(win.tabs.count())]
+    assert "Console" in names
+    win.con_ip.setText("10.0.0.5")
+    win.con_ip.editingFinished.emit()
+    assert win.settings.value("console/ip") == "10.0.0.5"
+    assert win.con_stop_btn.isEnabled() is False and win.con_bridge is None
+    win._con_crash("diag", "", "blk")                    # triage panel + handoff to the Crash log tab
+    assert win.con_triage.toPlainText().startswith("diag") and win.klog_in.toPlainText() == "blk"
+    for k in range(6000):
+        win._con_line(f"l{k}")
+    win._con_flush()
+    QApplication.instance().processEvents()
+    assert win.con_log.blockCount() <= win.LOG_LINES + 1
