@@ -81,6 +81,15 @@ class MainWindow(QMainWindow):
         self.target.setCurrentIndex(max(0, self.target.findData(int(self.settings.value("target", 4)))))
         self.target.currentIndexChanged.connect(self._invalidate)
         row.addWidget(self.target)
+        row.addWidget(QLabel("Console FW:"))
+        self.console_fw = QLineEdit(str(self.settings.value("console_fw", "")))
+        self.console_fw.setPlaceholderText("e.g. 11.60")
+        self.console_fw.setMaximumWidth(80)
+        self.console_fw.setToolTip("Firmware of the console you run on (--console-fw). Advice only: warns when "
+                                   "the target SDK is 2+ majors below it.")
+        self.console_fw.textChanged.connect(self._fw_changed)
+        self.target.currentIndexChanged.connect(self._fw_changed)
+        row.addWidget(self.console_fw)
         self.analyze_btn = QPushButton("Analyze")
         self.analyze_btn.clicked.connect(self._analyze)
         row.addWidget(self.analyze_btn)
@@ -92,6 +101,11 @@ class MainWindow(QMainWindow):
         f.setBold(True)
         self.info.setFont(f)
         v.addWidget(self.info)
+        self.fw_warn = QLabel()
+        self.fw_warn.setWordWrap(True)
+        self.fw_warn.setStyleSheet("color: #b36b00")
+        self.fw_warn.hide()
+        v.addWidget(self.fw_warn)
 
         # --- tabs --------------------------------------------------------------------------
         self.tabs = QTabWidget()
@@ -256,6 +270,15 @@ class MainWindow(QMainWindow):
         row.addWidget(self.replace_ampr)
         v.addLayout(row)
         row = QHBoxLayout()
+        row.addWidget(QLabel("Also build for:"))
+        self.also_edit = QLineEdit(str(self.settings.value("also_target", "")))
+        self.also_edit.setPlaceholderText("e.g. 5,11 — SDK-only siblings <out>-fwN (higher than the target)")
+        self.also_edit.setToolTip("--also-target: after the main build, write copies that differ only in the "
+                                  "SDK fields and param.json versions. Not available for in-place builds.")
+        self.also_edit.setEnabled(self.mode.currentData() != "inplace")
+        row.addWidget(self.also_edit, 1)
+        v.addLayout(row)
+        row = QHBoxLayout()
         self.progress = QProgressBar()
         self.progress.setFormat("")
         row.addWidget(self.progress, 1)
@@ -299,6 +322,19 @@ class MainWindow(QMainWindow):
         if w is not None:
             w.deleteLater()
 
+    def _fw_changed(self, *_) -> None:
+        w = sdk.console_warning(self.target.currentData(), 0, self.console_fw.text()) \
+            if self._console_fw_ok() else None
+        self.fw_warn.setText("⚠ " + w if w else "")
+        self.fw_warn.setVisible(bool(w))
+
+    def _console_fw_ok(self) -> bool:
+        t = self.console_fw.text().strip()
+        try:
+            return bool(t) and sdk.fw_major_of_str(t) >= 0
+        except ValueError:
+            return False
+
     def _invalidate(self, *_) -> None:
         self.plan = None
         self.build_btn.setEnabled(False)
@@ -307,6 +343,8 @@ class MainWindow(QMainWindow):
         inplace = self.mode.currentData() == "inplace"
         self.out_edit.setEnabled(not inplace)
         self.out_btn.setEnabled(not inplace)
+        if hasattr(self, "also_edit"):
+            self.also_edit.setEnabled(not inplace)          # siblings are separate outputs
 
     def _browse_game(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Game folder", self.game_edit.text())
@@ -402,6 +440,7 @@ class MainWindow(QMainWindow):
             return
         self.settings.setValue("game", str(game))
         self.settings.setValue("target", self.target.currentData())
+        self.settings.setValue("console_fw", self.console_fw.text().strip())
         self.say(f"analyzing {game} for FW {self.target.currentData()}.xx")
         self.busy(True)
         self.worker = AnalyzeWorker(game, self.target.currentData(), list(self.patches), self.replace_dump())
@@ -474,7 +513,12 @@ class MainWindow(QMainWindow):
     # ---- build --------------------------------------------------------------------------
     def build_options(self) -> BuildOptions:
         mode = self.mode.currentData()
-        return BuildOptions(target=self.target.currentData(), mode=mode,
+        also = [sdk.parse_target(x) for x in self.also_edit.text().split(",") if x.strip()] \
+            if mode != "inplace" else []                      # ValueError -> shown by _build
+        cfw = self.console_fw.text().strip()
+        if cfw:
+            sdk.fw_major_of_str(cfw)
+        return BuildOptions(also_targets=also, console_fw=cfw or None, target=self.target.currentData(), mode=mode,
                             out=None if mode == "inplace" else Path(self.out_edit.text()).expanduser(),
                             force=self.force.isChecked(), rules=self.selected_rules(),
                             replace_dump=self.replace_dump(),
@@ -485,7 +529,14 @@ class MainWindow(QMainWindow):
     def _build(self, confirm: bool = True) -> None:
         if self.plan is None:
             return
-        opts = self.build_options()
+        try:
+            opts = self.build_options()
+        except ValueError as e:
+            self.last_error = str(e)
+            self.say(self.last_error)
+            if not getattr(self, "_headless", False):
+                QMessageBox.warning(self, "Build options", self.last_error)
+            return
         if opts.mode != "inplace" and not self.out_edit.text().strip():
             QMessageBox.warning(self, "Output folder", "Choose an output folder.")
             return
@@ -517,6 +568,8 @@ class MainWindow(QMainWindow):
                 != QMessageBox.StandardButton.Yes:
             return
         self.settings.setValue("mode", opts.mode)
+        self.settings.setValue("console_fw", self.console_fw.text().strip())
+        self.settings.setValue("also_target", self.also_edit.text().strip())
         self.settings.setValue("out", self.out_edit.text())
         game = Path(self.plan.scan.root)
         self.say(f"building {game} -> FW {opts.target}.xx, {opts.mode}"

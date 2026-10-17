@@ -29,7 +29,7 @@ def recommendation(rule: str, ctx, prior: dict) -> tuple[bool, str]:
             if r["fixed"] and not r["unfixed"] and any(o["unfixed"] and o["sig"] == r["sig"] and o is not r
                                                        for o in rows) and r["fw"] >= needed:
                 needed, src_n = r["fw"], f"kit {r['kit']} fixed it"
-    t = ctx.target
+    t = getattr(ctx, "declared_sdk", ctx.target)      # declared SDK major, not the console FW (Phase 9b)
     conf = prior.get("confirmed")            # console-tested: beats what kits merely suggest
     if conf and t <= prior["needed_max"]:
         why = f"needed on {prior['needed_max']}.xx and below ({conf})"

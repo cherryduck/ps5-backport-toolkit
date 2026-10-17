@@ -118,3 +118,164 @@ def test_verification_catches_stray_edits(game, db, tmp_path, monkeypatch):
     monkeypatch.setattr(pl, "downgrade_sdk", sneaky)
     with pytest.raises(BuildError, match="unexpected changes"):
         build(game, BuildOptions(target=4, out=tmp_path / "o"), db, log=lambda m: None)
+
+
+# ---- Phase 10a: console FW advice, SDK pairs 4..13, siblings -------------------------------
+import os                                                   # noqa: E402
+from pathlib import Path                                    # noqa: E402
+
+
+def _tree(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in Path(root).rglob("*")
+            if p.is_file() and not p.name.startswith("backport-report")}
+
+
+def test_pairs_and_parse_4_to_13():
+    assert sdk.SUPPORTED_TARGETS == tuple(range(4, 14))
+    for m in range(4, 14):
+        ps5, ps4 = sdk.target_pair(m)
+        assert sdk.fw_major(ps5) == m and sdk.parse_target(str(m)) == (m, 0)
+        assert sdk.target_pair(m, 3)[0] == (ps5 & 0xFF00FFFF) | 0x30000
+    assert sdk.target_pair(11) == (0x11000040, 0x12590001)
+    assert sdk.target_pair(12) == (0x12000038, 0x13090001)
+    assert sdk.target_pair(13) == (0x13000035, 0x13590001)
+    assert sdk.parse_target("11.60") == (11, 0x60)
+    for bad in ("3", "14", "x", "4.123"):
+        with pytest.raises(ValueError):
+            sdk.parse_target(bad)
+
+
+def test_console_warning_trigger():
+    assert sdk.console_warning(4, 0, "11.60") and "--also-target" in sdk.console_warning(4, 0, "11.60")
+    assert sdk.console_warning(4, 0, "6.00")                 # exactly 2 majors
+    assert sdk.console_warning(4, 0, "5.50") is None         # 1 major
+    assert sdk.console_warning(11, 0, "11.60") is None
+    assert sdk.console_warning(4, 0, None) is None
+    with pytest.raises(ValueError):
+        sdk.fw_major_of_str("abc")
+
+
+def test_console_fw_in_report(game, db, tmp_path):
+    out = tmp_path / "out"
+    rep = build(game, BuildOptions(target=4, out=out, console_fw="11.60"), db, log=lambda m: None)
+    assert rep.console_fw == "11.60" and "black-screen" in rep.console_warning
+    j = json.loads((out / "backport-report.json").read_text())
+    assert j["console_fw"] == "11.60" and "black-screen" in j["console_warning"]
+    assert "console firmware" in (out / "backport-report.txt").read_text()
+    rep = build(game, BuildOptions(target=4, out=out, console_fw="5.00"), db, log=lambda m: None)
+    assert rep.console_warning == ""
+    with pytest.raises(BuildError, match="console firmware"):
+        build(game, BuildOptions(target=4, out=out, console_fw="abc"), db, log=lambda m: None)
+
+
+@pytest.mark.parametrize("mode", ["overlay", "full"])
+def test_sibling_differs_only_in_sdk_fields(game, db, tmp_path, mode):
+    out = tmp_path / "out"
+    rep = build(game, BuildOptions(target=4, out=out, mode=mode, also_targets=[(5, 0), (11, 0x60)]), db,
+                log=lambda m: None)
+    assert [s["target_str"] for s in rep.siblings] == ["5.xx", "11.60"]
+    main = _tree(out)
+    for suffix, tgt, minor in (("-fw5", 5, 0), ("-fw11.60", 11, 0x60)):
+        sib = tmp_path / ("out" + suffix)
+        st = _tree(sib)
+        assert set(st) == set(main)
+        ps5, ps4 = sdk.target_pair(tgt, minor)
+        changed = [r for r in main if main[r] != st[r]]
+        assert "eboot.bin" in changed and "sce_sys/param.json" in changed
+        for r in changed:
+            assert len(main[r]) == len(st[r])
+            diff = [i for i in range(len(main[r])) if main[r][i] != st[r][i]]
+            assert len(diff) <= (8 if r != "sce_sys/param.json" else 36)
+            if r != "sce_sys/param.json":
+                p = sdk.find(Binary(st[r], r))
+                assert (p.ps5, p.ps4) == (ps5, ps4)
+        pj = json.loads(st["sce_sys/param.json"].decode("utf-8-sig"))
+        want = f"0x{int(f'{tgt:02d}', 16) << 56 | minor << 48:016x}"
+        assert pj["sdkVersion"] == want and pj["requiredSystemSoftwareVersion"] == want
+        r = json.loads((sib / "backport-report.json").read_text())
+        assert r["sibling_of"] == str(out) and r["sibling_edits"]
+        assert "SIBLING" in (sib / "backport-report.txt").read_text()
+    # old.prx was already below the main target: not raised
+    assert sdk.find(Binary(_tree(tmp_path / "out-fw5")["sce_module/old.prx"], "x")).ps5 == 0x03000027 \
+        if "sce_module/old.prx" in main else True
+    assert json.loads((out / "backport-report.json").read_text())["siblings"]
+
+
+def test_sibling_fails_on_stray_change_and_is_removed(game, db, tmp_path, monkeypatch):
+    import ps5bp.core.pipeline as pl
+    real = pl.clone_file
+
+    def evil(src, dst):
+        r = real(src, dst)
+        if dst.name == "big.pak" and "-fw5" in str(dst):
+            b = bytearray(dst.read_bytes())
+            b[0x200] ^= 0xFF
+            dst.write_bytes(b)
+        return r
+    monkeypatch.setattr(pl, "clone_file", evil)
+    with pytest.raises(BuildError, match="outside the SDK fields"):
+        build(game, BuildOptions(target=4, out=tmp_path / "out", mode="full", also_targets=[(5, 0)]), db,
+              log=lambda m: None)
+    assert not (tmp_path / "out-fw5").exists()
+    assert (tmp_path / "out/eboot.bin").exists()             # the verified main build stays
+
+
+def test_sibling_refuses_lower_equal_and_inplace(game, db, tmp_path):
+    for bad in ([(4, 0)], [(7, 0), (4, 0)], [(3 + 1, 0)]):
+        with pytest.raises(BuildError, match="not higher"):
+            build(game, BuildOptions(target=5, out=tmp_path / "o", also_targets=bad, force=True), db,
+                  log=lambda m: None)
+    with pytest.raises(BuildError, match="not higher"):
+        build(game, BuildOptions(target=4, target_minor=0x50, out=tmp_path / "o", also_targets=[(4, 0x03)]), db,
+              log=lambda m: None)
+    assert not (tmp_path / "o").exists()
+    before = _tree(game)
+    with pytest.raises(BuildError, match="inplace"):
+        build(game, BuildOptions(target=4, mode="inplace", also_targets=[(5, 0)]), db, log=lambda m: None)
+    assert _tree(game) == before
+
+
+def test_overlay_sibling_undo(game, db, tmp_path):
+    import shutil
+    from ps5bp.core.undo import apply_undo, plan_undo
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out, also_targets=[(5, 0)]), db, log=lambda m: None)
+    sib = tmp_path / "out-fw5"
+    assert (tmp_path / "out-fw5.originals").is_dir()
+    before = _tree(game)
+    shutil.copytree(sib, game, dirs_exist_ok=True)
+    assert _tree(game) != before
+    apply_undo(game, plan_undo(game, [sib]))
+    after = {k: v for k, v in _tree(game).items() if not k.startswith("fakelib/") or k in before}
+    assert after == before
+    # ps5bp's own sdk fields survive only if the sibling kept them: sanity on a fakelib sibling file
+    assert not (game / "fakelib/libSceFoo.sprx").exists()
+
+
+def test_cli_console_fw_and_also_target(game, db, tmp_path, monkeypatch, capsys):
+    from ps5bp.cli import main
+    monkeypatch.setenv("PS5BP_HOME", str(tmp_path / "home"))
+    out = tmp_path / "cli"
+    assert main(["build", str(game), "--target", "4", "--out", str(out), "--console-fw", "11.60",
+                 "--also-target", "5,11"]) == 0
+    txt = capsys.readouterr().out
+    assert "black-screen" in txt and (tmp_path / "cli-fw5").is_dir() and (tmp_path / "cli-fw11").is_dir()
+    assert main(["build", str(game), "--target", "5", "--out", str(tmp_path / "x"), "--also-target", "4",
+                 "--force"]) == 1
+    with pytest.raises(SystemExit):
+        main(["build", str(game), "--target", "4", "--out", str(tmp_path / "y"), "--also-target", "14"])
+    assert main(["analyze", str(game), "--target", "4", "--console-fw", "9.00"]) == 0
+    assert "black-screen" in capsys.readouterr().out
+
+
+def test_rule_recommendation_keys_on_declared_sdk():
+    from types import SimpleNamespace
+    from ps5bp.core.rules.evidence_rules import recommendation
+    from ps5bp.core.rules.savedata_mount import SavedataMount
+    prior = SavedataMount.PRIOR
+    mk = lambda t: SimpleNamespace(target=t, declared_sdk=t, options={})          # noqa: E731
+    assert recommendation("savedata-mount", mk(4), prior) == recommendation("savedata-mount", SimpleNamespace(
+        target=4, options={}), prior)                       # default case unchanged
+    # a console at 11.xx does not change it: only the declared SDK does
+    from ps5bp.core.rules import RuleContext
+    assert RuleContext.declared_sdk.fget(SimpleNamespace(target=4)) == 4

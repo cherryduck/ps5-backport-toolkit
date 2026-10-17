@@ -77,6 +77,24 @@ ps5bp build GAME --target 4.03 --out OUT           # minor version: SDK 0x040300
 ps5bp build GAME ... --replace-dump-fakelib libSceAmpr[=KIT]   # swap the dump's Ampr emulator
 ```
 
+Targets are 4..13 (`--target 11` etc.; SDK pairs 11-13 are not yet checked against a real binary).
+
+```
+ps5bp build GAME --target 4 --out OUT --console-fw 11.60       # advice: warns when the SDK trails the console
+ps5bp build GAME --target 4 --out OUT --also-target 5,11       # + siblings OUT-fw5, OUT-fw11
+```
+
+`--console-fw X.YY` (also on `analyze`, and a remembered GUI field) only warns: with the
+declared SDK 2+ majors below the console FW there is a reported black-screen / GPU-hang
+risk at FW5+ with SDK-4 builds (Mortal Shell II, Minecraft Dungeons II on 9.00; STAR WARS
+Galactic Racer on Pro 11.20 — fixed by SDK pair 5 builds). The warning is also in the report.
+`--also-target` (majors or major.minor, each higher than `--target`; refused with `--mode
+inplace`) writes, after the main build verified, `<out>-fwN` copies that differ **only** in
+the SDK u32 pair of each binary and `param.json` sdkVersion / requiredSystemSoftwareVersion
+(every file is diffed against the main output; any other byte deletes the sibling and fails).
+Same fakelibs and rules as the main build; a plain `--target N` re-plans from scratch instead.
+Overlay siblings get their own `<out>-fwN.originals`, so `ps5bp undo GAME OUT-fwN` works.
+
 An input is "already backported" (needs `--force`) when its eboot's SDK is already at or
 below the target — a `fakelib/` folder alone (dumps ship Ampr/PlayGo layers) doesn't count.
 When the Ampr emulator is replaced, its `ampr_emu.index` is dropped (full), moved to

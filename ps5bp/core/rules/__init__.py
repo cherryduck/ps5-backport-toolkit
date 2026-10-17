@@ -32,10 +32,17 @@ class Finding:
 class RuleContext:
     gs: GameScan
     cov: Coverage | None
-    target: int
+    target: int          # the build's DECLARED SDK major (BuildOptions.target), never the console FW
     load: Callable[[str], Binary]                 # working copy of a game-relative file
     edit: Callable[..., None]                     # edit(file, kind, offset, old, new, note)
     options: dict = field(default_factory=dict)   # rule-specific (e.g. user-patch paths)
+
+    @property
+    def declared_sdk(self) -> int:
+        """Declared SDK major of the build. Fix recommendations key on this, not on the console
+        firmware: the game's runtime behaviour follows the SDK it declares (Phase 9b: savedata-mount
+        and wwise-71 on a Pro 11.60 with SDK-4 builds). Same value as `target` for a normal build."""
+        return self.target
 
     def base_for(self, rel: str) -> int:
         return EBOOT_BASE if rel == "eboot.bin" else 0
