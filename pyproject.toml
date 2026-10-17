@@ -12,7 +12,7 @@ dependencies = ["capstone>=5", "numpy"]
 
 [project.optional-dependencies]
 gui = ["PyQt6"]
-dev = ["pytest"]
+dev = ["pytest", "unicorn"]
 
 [project.scripts]
 ps5bp = "ps5bp.cli:main"

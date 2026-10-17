@@ -1,9 +1,12 @@
 """Shared helpers for rules: import stubs, symbol localisation."""
 from __future__ import annotations
 
+import bisect
+import re
 import struct
+from dataclasses import dataclass
 
-from ..asm import is_plt_entry, plt_stubs, stub_for
+from ..asm import is_plt_entry, plt_entries, plt_stubs, stub_for
 from ..binary import Binary
 from .. import dynamic
 
@@ -73,3 +76,74 @@ def calls_to_import(sc, nid_: str) -> list[int]:
             if t + 5 + int.from_bytes(sc.code[t - sc.cva + 1:t - sc.cva + 5], "little", signed=True) == stub:
                 out += sc.calls_to(t)
     return sorted(out)
+@dataclass
+class Slot:
+    idx: int
+    got: int
+    sym: int
+    name: str
+    nid: str
+    va: int
+    entry: bytes
+
+
+def jump_slots(b: Binary, d: dynamic.Dynamic) -> list[Slot]:
+    ents = plt_entries(b, d, 0)
+    t = d.tags
+    rel = b.read(t[dynamic.DT_JMPREL][0], t[dynamic.DT_PLTRELSZ][0])
+    out = []
+    for i, ((r_off, r_info, _), (name, va, e)) in enumerate(zip(struct.iter_unpack("<QQq", rel[:len(rel) // 24 * 24]), ents)):
+        out.append(Slot(i, r_off, r_info >> 32, name, name.split("#")[0], va, e))
+    return out
+
+
+def int3_runs(b: Binary, avoid: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """(rva, length) of usable int3 padding in executable segments (first byte of a run left alone)."""
+    # Same safety rules as GOT-seed caves (got_seed.int3_slots): the run must follow an instruction
+    # that never falls through (decoded backwards, so `eb cc` - a jump whose displacement is 0xcc - is
+    # not mistaken for padding) and no direct call/jmp/jcc may land inside it.
+    from .got_seed import _terminator
+    runs = []
+    for p in b.loads():
+        if not p.is_exec:
+            continue
+        seg = b.segment_bytes(p)
+        cand = [(m.start(), m.end()) for m in re.finditer(rb"\xcc{9,}", seg)
+                if m.start() >= 1 and _terminator(seg, m.start())]
+        if not cand:
+            continue
+        hit: set[int] = set()
+        starts = [s for s, _ in cand]
+        for m in re.finditer(rb"[\xe8\xe9]|\x0f[\x80-\x8f]", seg):
+            i = m.start()
+            n = 1 if seg[i] != 0x0F else 2
+            if i + n + 4 > len(seg):
+                continue
+            t = i + n + 4 + struct.unpack_from("<i", seg, i + n)[0]
+            k = bisect.bisect_right(starts, t) - 1
+            if k >= 0 and t < cand[k][1]:
+                hit.add(k)
+        for k, (s, e) in enumerate(cand):
+            if k in hit:
+                continue
+            lo, hi = p.vaddr + s + 1, p.vaddr + e
+            if any(a < hi and lo < e2 for a, e2 in avoid):
+                continue
+            runs.append((lo, hi - lo))
+    return runs
+
+
+def allocate_runs(runs: list[tuple[int, int]], sizes: dict[str, int]) -> dict[str, int] | None:
+    free = [[a, n] for a, n in runs]
+    at: dict[str, int] = {}
+    for name in sorted(sizes, key=lambda k: -sizes[k]):
+        fit = [r for r in free if r[1] >= sizes[name]]
+        if not fit:
+            return None
+        r = min(fit, key=lambda r: r[1])               # best fit
+        at[name] = r[0]
+        r[0] += sizes[name]
+        r[1] -= sizes[name]
+    return at
+
+

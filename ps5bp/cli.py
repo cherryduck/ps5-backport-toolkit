@@ -158,7 +158,11 @@ def cmd_analyze(a) -> int:
         if a.target:
             db = EvidenceDB()
             if db.kits():
-                print_coverage(coverage_analyze(gs, db, a.target[0], _replace_dump(a)), gs)
+                cov = coverage_analyze(gs, db, a.target[0], _replace_dump(a))
+                print_coverage(cov, gs)
+                from .core.advice import ampr_advice
+                for line in ampr_advice(gs, cov):
+                    print(f"ADVICE: {line}")
             else:
                 print("\n(no kits ingested — `ps5bp kit add` to enable import coverage)")
     return 0
@@ -374,6 +378,8 @@ def cmd_kit(a) -> int:
         print(f"  fakelibs: {', '.join(r['fakelibs'])}")
         if r["extras"]:
             print(f"  extras  : {', '.join(r['extras'])}")
+        if r.get("psml_overlay"):
+            print("  PSML overlay provider: libScePsml loads /app0/k9.psp and k9.psp is kept (rule psml-overlay)")
         print(f"  evidence: {r['present']} present (at FW {r['present_fw']}), {r['absent']} absent (bound to stubs), "
               f"{r['plt_stubs']} PLT stub(s)")
     elif a.kit_cmd == "list":
