@@ -10,6 +10,8 @@ stacked (an overlay copied over the game, then another).
   fakelib                   installed by the build -> deleted (if the build replaced a
                             fakelib the game shipped itself, that file can't be restored
                             from the report: use <out>.originals/ if present)
+  generated                 a file ps5bp wrote whole (ampr_emu.index): restored from <name>.orig
+                            (in-place) or <out>.originals/ (overlay) when there was one, else deleted
   removed                   restored from <name>.orig if present, else reported
 Verification (reports with `inputs`/`outputs` hashes): before a report's files are touched each must
 still equal the build's OUTPUT hash (still the backported file, not edited since), and after
@@ -116,7 +118,7 @@ def plan_undo(game: Path, reports: list[Path], force: bool = False) -> UndoPlan:
                     up.deletes.remove(rel)
             for e in rep["edits"]:
                 f = R(e["file"])
-                if e["kind"] in ("fakelib", "extra") and f not in have and (game / f).exists() and f not in gone:
+                if e["kind"] in ("fakelib", "extra", "generated") and f not in have and (game / f).exists() and f not in gone:
                     verify(rep, [f], "outputs", "this file is not the one the build installed")
                     up.deletes.append(f)
                     gone.add(f)
@@ -125,20 +127,32 @@ def plan_undo(game: Path, reports: list[Path], force: bool = False) -> UndoPlan:
             verify(rep, [t for t in touched if t not in gone], "inputs", "restored files do not match the build's "
                    "recorded inputs")
             continue
-        installed = {R(e["file"]) for e in rep["edits"] if e["kind"] in ("fakelib", "extra")}
-        older = {R(e["file"]) for r in reps[n + 1:] for e in r["edits"] if e["kind"] in ("fakelib", "extra")}
-        pre = sorted({R(e["file"]) for e in rep["edits"] if e["kind"] not in ("fakelib", "extra", "removed")} - installed)
+        installed = {R(e["file"]) for e in rep["edits"] if e["kind"] in ("fakelib", "extra", "generated")}
+        older = {R(e["file"]) for r in reps[n + 1:] for e in r["edits"] if e["kind"] in ("fakelib", "extra", "generated")}
+        pre = sorted({R(e["file"]) for e in rep["edits"] if e["kind"] not in ("fakelib", "extra", "generated", "removed")} - installed)
         verify(rep, pre + sorted(x for x in installed if (game / x).exists() and x not in gone), "outputs",
                "these game files are not the backported files this build wrote (changed since it was applied, "
                "or another build is on top)")
         for e in reversed(rep["edits"]):
             rel, kind = R(e["file"]), e["kind"]
-            if rel in installed and kind not in ("fakelib", "extra"):
+            if rel in installed and kind not in ("fakelib", "extra", "generated"):
                 continue                                    # whole file goes away anyway
             if kind == "extra":                             # a file a rule added (k9.psp ...): deleted again
                 if (game / rel).exists() and rel not in gone:
                     up.deletes.append(rel)
                     gone.add(rel)
+                cur.pop(rel, None)
+                up.count += 1
+                continue
+            if kind == "generated":                         # ampr_emu.index: the game's own comes back
+                bak_rel = R(rel + ".orig")
+                if e["old"] and (game / bak_rel).exists():
+                    up.restores.append((bak_rel, rel))
+                elif (game / rel).exists() and rel not in gone:
+                    if e["old"]:
+                        up.notes.append(f"{rel}: replaced by the build and no .orig backup found — deleted")
+                    up.deletes.append(rel)
+                gone.add(rel)
                 cur.pop(rel, None)
                 up.count += 1
                 continue

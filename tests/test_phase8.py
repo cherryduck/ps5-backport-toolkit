@@ -167,10 +167,11 @@ def test_replace_dump_ampr_handles_index(kits, tmp_path):
     rep = build(g, BuildOptions(target=4, out=tmp_path / "o", replace_dump={"libSceAmpr": "kitA"}), db,
                 log=lambda m: None)
     assert [f["module"] for f in rep.fakelibs] == ["libSceAmpr"]
-    assert any("ampr_emu.index" in w for w in rep.warnings)                   # overlay: tell the user
+    assert not any("delete" in w and "ampr_emu.index" in w for w in rep.warnings)   # 10g: never asked to delete it
+    assert (tmp_path / "o.originals/ampr_emu.index").read_bytes() == b"idx"          # the game's own is saved
     rep = build(g, BuildOptions(target=4, out=tmp_path / "f", mode="full", replace_dump={"libSceAmpr": None}),
                 db, log=lambda m: None)
-    assert not (tmp_path / "f/ampr_emu.index").exists()                       # full: stale index dropped
+    assert (tmp_path / "f/ampr_emu.index").stat().st_size > 3                 # full: refreshed, not dropped
     assert (tmp_path / "f/fakelib/libSceAmpr.sprx").read_bytes() != (g / "fakelib/libSceAmpr.sprx").read_bytes()
 
 

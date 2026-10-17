@@ -302,12 +302,24 @@ class MainWindow(QMainWindow):
             row.addWidget(QLabel(f"{mod}:"))
             cb = QComboBox()
             cb.setToolTip(f"What to do with the {mod} the dump ships (--replace-dump-fakelib): keep it, let "
-                          "the build pick the best kit's, or use one named kit's. Replacing Ampr removes "
-                          "the stale ampr_emu.index. Every launch starts on keep.")
+                          "the build pick the best kit's, or use one named kit's. ampr_emu.index is never "
+                          "deleted; see the AMPR index box. Every launch starts on keep.")
             cb.currentIndexChanged.connect(self._invalidate)
             self.replace_boxes[mod] = cb
             row.addWidget(cb, 1)
         self.replace_ampr, self.replace_playgo = self.replace_boxes["libSceAmpr"], self.replace_boxes["libScePlayGo"]
+        row.addWidget(QLabel("AMPR index:"))
+        self.ampr_index = QComboBox()
+        for label, key in (("auto", "auto"), ("regenerate", "regen"), ("keep", "keep")):
+            self.ampr_index.addItem(label, key)
+        self.ampr_index.setCurrentIndex(max(0, self.ampr_index.findData(str(self.settings.value("ampr_index", "auto")))))
+        self.ampr_index.setToolTip("ampr_emu.index of a game that carries the Ampr emulator (--ampr-index). auto: write "
+                                   "one if the game has none, refresh a stale one (unless asset packs depend on it); "
+                                   "regenerate: always rewrite it; keep: never touch it, only report staleness. The "
+                                   "game's own index is saved with the other originals, so Undo restores it.")
+        self.ampr_index.currentIndexChanged.connect(
+            lambda _=0: self.settings.setValue("ampr_index", self.ampr_index.currentData()))
+        row.addWidget(self.ampr_index)
         v.addLayout(row)
         row = QHBoxLayout()
         self.progress = QProgressBar()
@@ -531,6 +543,8 @@ class MainWindow(QMainWindow):
             warns += cov.deps
             from ..core.advice import ampr_advice
             warns += ["advice: " + x for x in ampr_advice(gs, cov)]
+        from ..core.pipeline import ampr_describe_lines, describe_ampr
+        warns += ["ampr: " + x for x in ampr_describe_lines(describe_ampr(Path(gs.root)))]
         self.warn_list.clear()
         self.warn_list.addItems(warns or ["no warnings"])
         self._fill_rules(p.findings)
@@ -562,7 +576,7 @@ class MainWindow(QMainWindow):
         return BuildOptions(also_targets=also, seeds=seeds, seed_plt_fallback=self.seed_plt.isChecked(), console_fw=cfw or None, target=self.target.currentData(), mode=mode,
                             out=None if mode == "inplace" else Path(self.out_edit.text()).expanduser(),
                             force=self.force.isChecked(), rules=self.selected_rules(),
-                            replace_dump=self.replace_dump(),
+                            replace_dump=self.replace_dump(), ampr_index=self.ampr_index.currentData() or "auto",
                             patches=list(self.patches) if self.rule_boxes["user-patch"].isChecked() else [],
                             memfix=self.memfix_choices(),
                             klog_text=self.klog_in.toPlainText() or None)
@@ -678,6 +692,9 @@ class MainWindow(QMainWindow):
         lc = self.libc_line(rep.libc_check)
         if lc:
             t += "\n\n" + lc
+        ax = (rep.ampr or {}).get("index") or {}
+        if ax.get("action") and ax["action"] != "none":
+            t += f"\n\nAMPR index: {ax['action']}" + (f" ({ax['entries']} entries)" if ax.get("entries") else "")
         if rep.console_warning:
             t += "\n\n⚠ " + rep.console_warning
         if rep.originals:

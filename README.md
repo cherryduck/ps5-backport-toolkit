@@ -45,6 +45,7 @@ from a decrypted dump and copy the result onto the console your usual way.
 | **Fix rule** | One known fix (e.g. `wwise-71` for missing sound). Off unless you tick it; ★ means "recommended for this game". |
 | **klog** | The console's kernel log. When a game crashes, the reason is in here. |
 | **Overlay** | The default output: only the files that changed, to be copied over the game. |
+| **Ampr index** | `ampr_emu.index`: a list of every file in the game (name, size, date) that the Ampr emulator reads instead of asking the disk. Needed on read-only game images. |
 
 ---
 
@@ -257,7 +258,9 @@ ps5bp ignores the usual harmless noise (fake-signed mount messages, missing save
 PSN errors), finds where the game died, and with the game folder disassembles the code at each
 step of the backtrace. It names the function that failed and suggests a rule. Example: for
 Wolverine on a Pro at 11.60 it finds the start-up memory allocation failing and suggests
-`pssr-memory` or `pro-disable`.
+`pssr-memory` or `pro-disable`. It also reads the Ampr emulator's own log lines (`[AMPR_EMU]`,
+`apr.index …`, `indexed-path-missing`): a missing, stale, corrupt or unwritable `ampr_emu.index` is
+named, with the fix (rebuild with `--ampr-index regen`, or run once from a writable location).
 
 ### 3. The game quits at start-up: memfix
 
@@ -310,6 +313,24 @@ Only a console boot tells you whether a fix works; ps5bp records your results, i
 - **Rebuilding into the same output folder replaces the previous build.** The app asks first.
   ps5bp won't write into any other non-empty folder.
 
+**The Ampr index (`ampr_emu.index`).** Some dumps ship an Ampr emulator (`fakelib/libSceAmpr.sprx`).
+It trusts `ampr_emu.index` for file sizes, and builds the file itself on first start only if the
+game folder is writable. ps5bp therefore **never deletes it**. When the finished game contains an
+Ampr emulator, ps5bp looks at the index:
+- **none** → it writes a fresh one (so games on a read-only image work);
+- **matches** the final files (same names and sizes) → left alone;
+- **stale** (a file was added, removed or resized) → rewritten;
+- **the game has `ampr_assets.index` asset packs** → the packs are tied to the index's numbering, so
+  the index is never rewritten on its own; ps5bp keeps yours and warns if it no longer matches.
+
+Where it goes: in an overlay the new index is part of the overlay (the game's own is saved in
+`<out>.originals/`, so *Undo* brings it back); in `full` it's in the output; in `inplace` the
+old one becomes `ampr_emu.index.orig`. Choose the behaviour with *AMPR index* in the app or
+`--ampr-index auto|regen|keep` (`regen` refuses a change of file names when packs exist unless
+`--force`). The report lists the emulator version(s) (the dump's and the kit's) and what was done,
+and `analyze` shows the same plus whether an index and packs exist. (`*.orig` backups and ps5bp's
+own report files are not listed in the index.)
+
 **Undo:** if you copied an overlay over a game and want the original back:
 - App: *Undo applied backport…* → pick the game folder and the output folder(s), newest first →
   *Preview* → *Undo backport*.
@@ -349,6 +370,7 @@ else changed them since, it stops. *Force* / `--force` overrides that check.
 | `--console-fw X.YY` | Your console's firmware (warnings only). |
 | `--also-target 5,11` | Also write `<out>-fw5`, `<out>-fw11` (only version numbers differ). |
 | `--replace-dump-fakelib libSceAmpr[=KIT]` | Use a kit's libSceAmpr/libScePlayGo instead of the dump's own (best kit, or the named one). |
+| `--ampr-index auto\|regen\|keep` | `ampr_emu.index` of games with an Ampr emulator: write/refresh it when needed (default), always rewrite it, or never touch it. |
 | `--patch FILE.json` | Apply your own patch recipe (turns on `user-patch`). |
 | `--memfix SITE:VARIANT[:AMOUNT]` + `--klog F` | Apply a memory fix from `memfix`. |
 | `--seed NID` / `--seed-plt-fallback` | `compat-stubs`: force a specific stand-in / allow the older delivery method. |
@@ -379,8 +401,9 @@ The rest of this file is for people who want to know exactly what ps5bp changes.
 
 SELFs are patched **in place**; nothing is re-signed. An input counts as "already backported"
 when its eboot's SDK is at or below the target. A `fakelib/` folder alone doesn't count, because
-dumps ship Ampr/PlayGo layers. When the dump's Ampr emulator is replaced, its `ampr_emu.index`
-is dropped (full mode), moved to `.orig` (inplace) or listed for deletion (overlay).
+dumps ship Ampr/PlayGo layers. `ampr_emu.index` is never dropped: after the files are written it
+is created, kept or regenerated for the final game (see *The Ampr index* above), recorded as a
+`generated` edit with its hash like any other output, and verified by re-reading it against the tree.
 
 **Siblings (`--also-target`).** These are written only after the main build has verified. Each
 `<out>-fwN` copy differs from the main output **only** in each binary's SDK pair and
