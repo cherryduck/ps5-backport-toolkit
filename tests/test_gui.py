@@ -148,3 +148,23 @@ def test_output_follows_game(win, tmp_path):
     assert win.out_edit.text() == str(tmp_path / "custom")
     win.game_edit.setText(str(b))                              # another game: never reuse it
     assert win.out_edit.text() == str(tmp_path / "PPSA00002-backport")
+
+
+def test_gui_target_list_console_fw_and_also(win, game, tmp_path):
+    assert [win.target.itemData(i) for i in range(win.target.count())] == list(range(4, 14))
+    win.target.setCurrentIndex(win.target.findData(4))
+    win.console_fw.setText("11.60")
+    assert not win.fw_warn.isHidden() and "black-screen" in win.fw_warn.text()
+    win.console_fw.setText("5.00")
+    assert win.fw_warn.isHidden()
+    win.console_fw.setText("11.60")
+    win.also_edit.setText("5,11")
+    win.out_edit.setText(str(tmp_path / "gout"))
+    o = win.build_options()
+    assert o.console_fw == "11.60" and o.also_targets == [(5, 0), (11, 0)]
+    win.also_edit.setText("zz")
+    with pytest.raises(ValueError):
+        win.build_options()
+    win.also_edit.setText("5")
+    win.mode.setCurrentIndex(win.mode.findData("inplace"))
+    assert not win.also_edit.isEnabled() and win.build_options().also_targets == []

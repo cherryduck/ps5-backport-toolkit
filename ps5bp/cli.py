@@ -111,6 +111,21 @@ def _target(s: str) -> tuple[int, int]:
         raise argparse.ArgumentTypeError(str(e)) from None
 
 
+def _console_fw(s: str) -> str:
+    try:
+        sdk.fw_major_of_str(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+    return s.strip()
+
+
+def _also_targets(s: str) -> list[tuple[int, int]]:
+    try:
+        return [sdk.parse_target(x) for x in s.split(",") if x.strip()]
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
 def _replace_dump(a) -> dict[str, str | None]:
     out: dict[str, str | None] = {}
     for x in getattr(a, "replace_dump_fakelib", []) or []:
@@ -135,6 +150,10 @@ def cmd_analyze(a) -> int:
         print()
     else:
         print_scan(gs, a.target)
+        if a.target and a.console_fw:
+            w = sdk.console_warning(a.target[0], a.target[1], a.console_fw)
+            print(f"WARNING: {w}" if w else f"console FW {a.console_fw}: declared SDK "
+                  f"{sdk.target_str(*a.target)} is close enough, no warning")
         if a.target:
             db = EvidenceDB()
             if db.kits():
@@ -150,7 +169,8 @@ def cmd_build(a) -> int:
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
                         strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
                         patches=[Path(x) for x in a.patch], memfix=list(a.memfix),
-                        klog=Path(a.klog) if a.klog else None)
+                        klog=Path(a.klog) if a.klog else None, console_fw=a.console_fw,
+                        also_targets=[t for grp in a.also_target for t in grp])
     db = EvidenceDB() if not a.no_fakelibs else None
     try:
         rep = build(Path(a.game), opts, db, log=lambda m: print(f"[ps5bp] {m}", file=sys.stderr))
@@ -330,14 +350,21 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     an = sub.add_parser("analyze", help="scan a game folder (read-only)")
     an.add_argument("game", help="game root (folder containing eboot.bin and sce_sys/)")
-    an.add_argument("--target", type=_target, help="target firmware: 4..7, or major.minor such as 4.03")
+    an.add_argument("--target", type=_target, help="target firmware: 4..13, or major.minor such as 4.03")
+    an.add_argument("--console-fw", type=_console_fw, metavar="X.YY",
+                    help="firmware of the console you will run on (advice: warns when --target is >=2 majors below)")
     an.add_argument("--replace-dump-fakelib", action="append", default=[], metavar="MODULE[=KIT]",
                     help="use a kit's build instead of the dump's own libSceAmpr / libScePlayGo")
     an.add_argument("--json", action="store_true", help="machine-readable output")
     an.set_defaults(func=cmd_analyze)
     bd = sub.add_parser("build", help="produce a backport")
     bd.add_argument("game")
-    bd.add_argument("--target", type=_target, required=True, help="4..7, or major.minor such as 4.03")
+    bd.add_argument("--target", type=_target, required=True, help="4..13, or major.minor such as 4.03")
+    bd.add_argument("--console-fw", type=_console_fw, metavar="X.YY",
+                    help="firmware of the console you will run on (advice: warns when --target is >=2 majors below)")
+    bd.add_argument("--also-target", type=_also_targets, action="append", default=[], metavar="N[,N...]",
+                    help="after the main build, write <out>-fwN siblings that differ only in SDK fields + "
+                         "param.json (majors or major.minor, each higher than --target; not with --mode inplace)")
     bd.add_argument("--replace-dump-fakelib", action="append", default=[], metavar="MODULE[=KIT]",
                     help="use a kit's build instead of the dump's own libSceAmpr / libScePlayGo "
                          "(removes the stale ampr_emu.index)")

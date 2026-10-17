@@ -197,7 +197,7 @@ def test_minor_targets():
     assert sdk.target_pair(4, 0x03) == (0x04030031, 0x09040001)
     assert sdk.target_str(4, 3) == "4.03" and sdk.target_str(4) == "4.xx"
     with pytest.raises(ValueError):
-        sdk.parse_target("12")
+        sdk.parse_target("14")
     t, ch = patch_param_json('{"sdkVersion": "0x1200000000000000"}', 4, 0x03)
     assert t == '{"sdkVersion": "0x0403000000000000"}' and ch
 
