@@ -88,7 +88,9 @@ Start **PS5 Backporter** from the app menu (or run `ps5bp-gui`).
    - **Overview**: every executable in the game and any problems, with warnings and advice below.
    - **Imports**: every system library the game uses and where it will come from on the target
      (`system` = firmware has it, `fakelib` = a kit supplies it, `missing` = nobody does).
-   - **Fix rules**: the fixes that apply to this game. ★ rows are recommended; tick those.
+   - **Fix rules**: the fixes that apply to this game. ★ rows are recommended; tick those, or tick
+     **Tick all recommended (★)** at the top of the tab to do it for you (it re-ticks after every Analyze
+     and remembers its state; unticking it unticks only the ★ rows).
 5. **Choose where the output goes.** The bottom row: mode *overlay* (default) and an output
    folder (defaults to `<game>-backport` next to the game).
 6. **Press Build backport.** When it's done a dialog shows what was changed. The output folder
@@ -121,7 +123,8 @@ ps5bp kit add "FW4xx PPSA11386 backport.zip" --fw 4 --source DLPS
 ps5bp analyze /games/PPSA12345 --target 4 --console-fw 11.60
 
 # build, with the recommended fixes the analysis showed (★)
-ps5bp build /games/PPSA12345 --target 4 --out /games/PPSA12345-backport --rule wwise-71 --rule savedata-mount
+ps5bp build /games/PPSA12345 --target 4 --out /games/PPSA12345-backport --recommended
+# (same as naming each one: --rule wwise-71 --rule savedata-mount ...)
 
 # copy /games/PPSA12345-backport over the game, run it; if it crashes, save the klog and:
 ps5bp klog crash.txt --game /games/PPSA12345
@@ -186,9 +189,10 @@ is listed as a candidate for a new fix (`--recipe --out DIR` saves it as a per-g
 
 ## Fix rules: which to tick
 
-All rules are **off** unless you tick them (app: *Fix rules* tab; command line: `--rule NAME`).
+All rules are **off** unless you tick them (app: *Fix rules* tab; command line: `--rule NAME`, or `--recommended` for every ★ rule).
 Analyze marks the ones recommended for your game with ★ and explains why. Rules that would
-conflict can't be ticked together. A rule that finds nothing to change does nothing.
+conflict can't be ticked together (*Tick all recommended* / `--recommended` keeps the first one in
+`ps5bp rules` order and tells you which it skipped). A rule that finds nothing to change does nothing.
 
 **Start with the ★ ones.** Then use this table when something specific goes wrong:
 
@@ -210,12 +214,12 @@ All rules, in plain words:
 | `frostbite-8ch` | Same problem in EA/Frostbite games (12 → 8 channels). | 4.xx |
 | `set3-nonfatal` | On firmware 6–9 an audio latency call fails and the game gives up on sound; makes the failure harmless. | never automatically (untested on 6–9) |
 | `savedata-mount` | Save-game mount request uses a value 4.xx rejects (error CE-107098-5). Read-only mounts are left alone. | when kits show it (console-tested) |
-| `savedata-prepare` | Save "prepare" request uses a mode 4.xx doesn't know (2, 3 or 6). | never automatically |
+| `savedata-prepare` | Save "prepare" request uses a mode 4.xx doesn't know (2, 3 or 6). Console-tested: Kingdom Hearts HD 2.8 on a PS5 Pro 11.60 (mode 6). | 4.xx |
 | `savedata-dirsearch` | Game uses a save-search function added in 5.02; switches it to the older one. | never automatically |
 | `gamepresets-28` | Game-presets request is 8 bytes bigger than 4.xx accepts. | 4.xx |
 | `tls-atexit` | libc uses a thread-exit function that only exists from 11.00; uses the older equivalent. | target below 11 |
 | `mapflex-flags` | libc passes a memory flag the retargeted memory function doesn't accept. | whenever libc has those calls |
-| `pro-disable` | The game runs as on a base PS5 (no Pro / PSSR path). Most reliable Pro fix; loses Pro features. | when kits prove the Pro query is missing on the target |
+| `pro-disable` | The game runs as on a base PS5 (no Pro / PSSR path). Loses Pro features. Only needed when the game misbehaves on a Pro: a current console (e.g. Pro 11.60) has these functions itself. | never automatically |
 | `pssr-memory` | Keeps Pro/PSSR and shrinks its start-up memory use; uses per-game recipes (Wolverine included) and ones you confirm with memfix. | when a recipe matches this game version |
 | `psml-overlay` | Ships a kit's PSSR model library + `k9.psp` for Pro titles whose model the firmware lacks. Needs a kit that has them. | never automatically |
 | `trinity-hw-gate` | *Experimental.* One build that correctly detects base vs Pro, instead of forcing either. | never (needs console testing) |
@@ -393,6 +397,7 @@ else changed them since, it stops. *Force* / `--force` overrides that check.
 | `--target N` | Oldest firmware to support: 4–13, or e.g. `4.03`. |
 | `--out OUT` / `--mode overlay\|full\|inplace` | Where and how to write. |
 | `--rule NAME` / `--no-rule NAME` | Turn fix rules on/off (repeatable). |
+| `--recommended` | Also turn on every rule the analysis marks as recommended (★). The ones added, and any skipped because of a conflict, are printed as warnings; `--no-rule` still wins. |
 | `--console-fw X.YY` | Your console's firmware (warnings only). |
 | `--also-target 5,11` | Also write `<out>-fw5`, `<out>-fw11` (only version numbers differ). |
 | `--replace-dump-fakelib libSceAmpr[=KIT]` | Use a kit's libSceAmpr/libScePlayGo instead of the dump's own (best kit, or the named one). |
@@ -483,17 +488,17 @@ before this feature: `ps5bp kit reindex`, or `kit add --replace`.
 
 | Rule | Exact change and guards |
 |---|---|
-| `pro-disable` | Pro hardware query (`NH6xARDOVv8`) → both outputs 0 (base PS5); `sceKernelIsTrinityMode` → 0. The PLT entry becomes the stub; if the NID is proven absent on the target, the import is bound locally. Conflicts with `pssr-memory`. |
+| `pro-disable` | Pro hardware query (`NH6xARDOVv8`) → both outputs 0 (base PS5); `sceKernelIsTrinityMode` → 0. The PLT entry becomes the stub; if the NID is proven absent on the target, the import is bound locally. Never recommended: the declared SDK says nothing about the console's own firmware, which normally has these functions. Conflicts with `pssr-memory`. |
 | `pssr-memory` | Keep Pro/PSSR; per-game recipes in `ps5bp/data/recipes/` shrink or split start-up allocations. The Wolverine 01.001.005 recipe reproduces the DLPS FW4 eboot byte for byte. Combines with `psml-overlay`. |
 | `kit-stubs` | Every import some kit PLT-stubbed for this firmware gets the same stub, in every game binary; `--stubs-from KIT` limits sources. Pro NIDs are left to `pro-disable` / `pssr-memory` when on. |
 | `compat-stubs` | **GOT-seed** stubs from `ps5bp/data/stub_contracts.json` (details below). |
 | `set3-nonfatal` | Targets 6–9: `sceAudioOut2Set3DLatency` rejects mode>1 (0x80268001) and Wwise treats that as fatal. At every call, `test eax,eax; je X` → `jmp X`. All callers must have exactly that shape, else nothing is patched. |
 | `mapflex-flags` | Clears flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory`. |
-| `savedata-mount` | `sceSaveDataMount3` request +0x18 (systemBlocks) −1 → 0. Follows register alias chains and local wrapper functions, requires a non-zero blocks (+0x10) store and an `ff ff ff ff`-ending encoding, and refuses ambiguity. Unity `SaveData.prx`: the 16-byte vector copy of blocks+systemBlocks becomes an 8-byte copy (rbx/r14/r15 forms; the request must be zeroed first; exactly one copy). Console-confirmed on ACE COMBAT 8. Sites whose mount mode (+0x20) is the constant 1 (read-only) are reported but not patched: a read-only mount never creates, FW4 kits leave −1 there, and 0 was suspected to make 4.xx reject it (`0x809f8032` on KH HD 2.8), but a console retest with systemBlocks=193 still failed the same way, so that was not the cause. |
+| `savedata-mount` | `sceSaveDataMount3` request +0x18 (systemBlocks) −1 → 0. Follows register alias chains and local wrapper functions, requires a non-zero blocks (+0x10) store and an `ff ff ff ff`-ending encoding, and refuses ambiguity. Unity `SaveData.prx`: the 16-byte vector copy of blocks+systemBlocks becomes an 8-byte copy (rbx/r14/r15 forms; the request must be zeroed first; exactly one copy). Console-confirmed on ACE COMBAT 8. Sites whose mount mode (+0x20) is the constant 1 (read-only) are reported but not patched: a read-only mount never creates, FW4 kits leave −1 there, and 0 was suspected to make 4.xx reject it (`0x809f8032` on KH HD 2.8), but a console retest with systemBlocks=193 still failed the same way, so that was not the cause. Console-tested: KH HD 2.8 boots on a PS5 Pro 11.60 with the read-only site left at −1 and the create site at 0. |
 | `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) → 7.1 where requested; lookup tables untouched. Console-tested on ACE COMBAT 8. |
 | `gamepresets-28` | `sceUserServiceGetGamePresets` request size store 0x30 → 0x28, including the helper-initialised form (its memset length is left alone). Already 0x28 → DONE; anything else is refused. |
 | `tls-atexit` | libc `__cxa_thread_atexit` = `push rbp; mov rbp,rsp; call PLT(qBS714-Jr3g); pop rbp; ret` (import exists from 11.00) → the call is retargeted to libc's own `__cxa_atexit`. Needs both exports and exactly that body. |
-| `savedata-prepare` | `sceSaveDataPrepare` request mode (dword +4) 2 → 0, 6 → 0, or 3 → 0 after a vector zero; exactly one store per call; any other non-zero value is reported as UNKNOWN with the value shown. Mode 6 (KH HD 2.8) has not been seen in community FW4 builds yet — console-test it. |
+| `savedata-prepare` | `sceSaveDataPrepare` request mode (dword +4) 2 → 0, 6 → 0, or 3 → 0 after a vector zero; exactly one store per call; any other non-zero value is reported as UNKNOWN with the value shown. Recommended at target 4 and below. Modes 2/3 come from community FW4 builds; mode 6 is console-tested on KH HD 2.8 (PPSA35909, FW4 overlay on a PS5 Pro 11.60). |
 | `savedata-dirsearch` | 4.xx: DirNameSearch2 imported without DirNameSearch → import renamed; both imported → Search2's lazy GOT slot points at Search's PLT stub. |
 | `frostbite-8ch` | EA/Frostbite AudioOut2 12 → 8 channels (`mov r9d,0x30c → 0x208`, the 0xC00 format store, the channel count) in three known layouts; every anchor must match a layout completely. |
 | `sync-umtx` | libc / Unity `PS5Util.prx` importing SyncOnAddress Wait32/Wait64 (from 9.00) or Wake/Wait (from 6.00) on a lower target: PLT entries become shims onto FreeBSD `_umtx_op` (Wait32 op 11, Wait64/Wait op 2, Wake op 3). A helper turns the uint32 µs timeout pointer into a relative timespec, and import strings are renamed in place. Guards: no BIND_NOW, canonical lazy PLT entries, unique strings, no GOT references outside the PLT, cave space. Emulation-tested with unicorn. ABIs in the docstring of `ps5bp/core/rules/sync_umtx.py`. |

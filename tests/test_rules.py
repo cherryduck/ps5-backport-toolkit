@@ -95,7 +95,7 @@ def test_pro_disable(game, db, tmp_path):
 def test_rules_off_by_default_but_recommended(game, db, tmp_path):
     rep = build(game, BuildOptions(target=4, out=tmp_path / "o"), db, log=lambda m: None)
     assert Binary.load(tmp_path / "o/eboot.bin").read(TEXT_VA, 2) == b"\xff\x25"
-    assert any("recommended: --rule pro-disable" in w for w in rep.warnings)
+    assert not any("recommended: --rule pro-disable" in w for w in rep.warnings)   # 10j: never recommended
 
 
 def test_stub_absent_and_conflicts(game, db, tmp_path):

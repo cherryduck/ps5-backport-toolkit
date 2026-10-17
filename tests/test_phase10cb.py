@@ -326,7 +326,8 @@ def prep_game(tmp, code):
 def test_prepare_mode_patch_and_done(tmp_path):
     g = prep_game(tmp_path / "2", prep(H("55 4889e5 c745e4 02000000 488d75e0")))
     ((st, f),) = statuses(g, "savedata-prepare")
-    assert st == "PATCH" and not f.recommended
+    assert st == "PATCH" and f.recommended                     # declared SDK 4 (Phase 10j)
+    assert not statuses(g, "savedata-prepare", 8)[0][1].recommended
     rep, (fr,) = run(g, tmp_path / "2", "savedata-prepare")
     b = Binary.load(tmp_path / "2/out/eboot.bin")
     assert rep.ok and b.read(0x100 + 4, 7) == H("c745e4 00000000")

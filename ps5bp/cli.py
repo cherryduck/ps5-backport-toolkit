@@ -178,7 +178,7 @@ def cmd_build(a) -> int:
     from .core.pipeline import BuildError, BuildOptions, build
     opts = BuildOptions(target=a.target[0], target_minor=a.target[1], replace_dump=_replace_dump(a), stubs_from=list(a.stubs_from), seeds=list(a.seed), seed_plt_fallback=a.seed_plt_fallback, mode=a.mode, out=Path(a.out) if a.out else None, ampr_index=a.ampr_index,
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
-                        strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
+                        strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), recommended=a.recommended, no_rules=set(a.no_rule),
                         patches=[Path(x) for x in a.patch], memfix=list(a.memfix),
                         klog=Path(a.klog) if a.klog else None, console_fw=a.console_fw,
                         also_targets=[t for grp in a.also_target for t in grp])
@@ -459,6 +459,8 @@ def main(argv: list[str] | None = None) -> int:
     bd.add_argument("--dry-run", action="store_true", help="plan only, write nothing")
     bd.add_argument("--rule", action="append", default=[], metavar="NAME",
                     help="enable a fix rule (repeatable; see `ps5bp rules`)")
+    bd.add_argument("--recommended", action="store_true",
+                    help="also enable every rule the analysis marks as recommended (★); on a conflict the first rule in `ps5bp rules` order wins")
     bd.add_argument("--no-rule", action="append", default=[], metavar="NAME", help="disable a fix rule")
     bd.add_argument("--patch", action="append", default=[], metavar="FILE", help="apply a patch recipe (JSON)")
     bd.add_argument("--memfix", action="append", default=[], metavar="SITE:VARIANT[:AMOUNT]",
