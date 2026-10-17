@@ -12,6 +12,7 @@ rewritten in place to 0 (same instruction, imm32 ffffffff -> 00000000).
 Phase 10h: a site whose mount mode (+0x20) is the constant 1 (read-only) is reported but NOT
 patched: a read-only mount never creates, FW4 kits leave -1 there, and ps5bp's 0 on such a site
 was once suspected of a KH HD 2.8 0x809f8032 loop (disproved: that was a half-created save).
+Console-tested: KH HD 2.8 (PPSA35909) boots on a PS5 Pro 11.60 with read-only left at -1 and the create site at 0.
 When rdi comes from elsewhere the site is reported as unknown unless the extended
 (flow-based) detector below can prove it:
   * register alias chains (`mov rax,rsi` / `lea rdi,[rax+8]` / `add`), stores in any basic
@@ -47,7 +48,7 @@ MOUNT3 = "ZP4e7rlzOUk"           # sceSaveDataMount3
 FIELD = 0x18
 MODE = 0x20          # mount mode; a constant 1 (read-only) never creates, so +0x18 is unused there
 READONLY_WHY = ("read-only mount: systemBlocks left at -1 (a read-only mount never creates; FW4 kits leave it; "
-                "matches DLPS's FW4 builds)")
+                "matches DLPS's FW4 builds; console-tested: KH HD 2.8 boots with it left at -1)")
 _MEM = re.compile(r"\[(\w+)(?: ([+-]) (0x[0-9a-f]+|\d+))?\]")
 
 

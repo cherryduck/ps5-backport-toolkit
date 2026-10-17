@@ -71,6 +71,7 @@ class BuildOptions:
     strict: bool = False         # fail when coverage reports absent/missing modules
     dry_run: bool = False
     rules: set[str] = field(default_factory=set)       # opt-in rules (--rule)
+    recommended: bool = False                          # also enable every recommended applicable rule (--recommended)
     no_rules: set[str] = field(default_factory=set)    # disabled rules (--no-rule)
     patches: list[Path] = field(default_factory=list)  # user recipe files (--patch)
     memfix: list[str] = field(default_factory=list)    # generated memory fixes (SITE:VARIANT[:AMOUNT])
@@ -846,6 +847,21 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                       options={"patches": patches, "enabled": set(active), "stubs_from": opts.stubs_from,
                                "db": db, "seeds": list(opts.seeds), "seed_plt_fallback": opts.seed_plt_fallback})
     found = detect_all(ctx)
+    if opts.recommended:
+        from .rules import pick_recommended, registry
+        rec = {f.rule for f in found if f.recommended and f.applicable}
+        chosen, skipped = pick_recommended(rec, set(active), set(opts.no_rules))
+        if chosen:
+            reg = registry()
+            for n in chosen:
+                active[n] = reg[n]
+            ctx.options["enabled"] = set(active)
+            found = detect_all(ctx)               # some rules look at which others are on
+            rep.warnings.append(f"--recommended: enabled {', '.join(chosen)}")
+        for n, other in skipped:
+            rep.warnings.append(f"--recommended: {n} not enabled: conflicts with {other}")
+        if not chosen and not skipped:
+            rep.warnings.append("--recommended: no recommended rule to add")
     for n in opts.seeds:
         if not any(f.rule == "compat-stubs" and f.data.get("nid") == n for f in found):
             rep.warnings.append(f"--seed {n}: no game binary imports it (or a chosen fakelib / game module provides it)")

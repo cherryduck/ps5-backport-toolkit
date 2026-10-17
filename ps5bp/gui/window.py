@@ -15,7 +15,7 @@ from .. import __version__
 from ..core import sdk
 from ..core.evidence import EvidenceDB, home
 from ..core.pipeline import MODES, BuildOptions
-from ..core.rules import registry
+from ..core.rules import pick_recommended, registry
 from ..core.rules.contracts import load as load_contracts
 from .dialogs import LearnDialog, UndoDialog
 from .workers import AnalyzeWorker, BuildWorker, ConsoleBridge, FuncWorker, KitWorker
@@ -128,6 +128,13 @@ class MainWindow(QMainWindow):
         rw = QWidget()
         rv = QVBoxLayout(rw)
         rv.addWidget(QLabel("Fix rules are off unless ticked. Rows marked ★ are recommended for this game."))
+        self.rec_all = QCheckBox("Tick all recommended (★)")
+        self.rec_all.setToolTip("Ticks every ★ row (the first one wins if two conflict) and keeps doing so after each\n"
+                                "Analyze. Unticking it unticks the ★ rows only; rows you ticked yourself stay.")
+        self.rec_all.setChecked(self.settings.value("rules/auto_recommended", "false") in (True, "true"))
+        self.rec_all.toggled.connect(self._rec_all_toggled)
+        rv.addWidget(self.rec_all)
+        self.rec_rules: list[str] = []                     # ★ rows (usable + recommended) of the last analyze
         self.rule_table = table(["", "Rule", "Findings", "What it does"])
         self.rule_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         rv.addWidget(self.rule_table, 1)
@@ -424,11 +431,14 @@ class MainWindow(QMainWindow):
         reg = registry()
         checked = {n for n, b in self.rule_boxes.items() if b.isChecked()}
         self.rule_boxes = {}
+        self.rec_rules = []
         self.rule_table.setRowCount(len(reg))
         for r, rule in enumerate(reg.values()):
             fs = by.get(rule.name, [])
             usable = [f for f in fs if f.applicable]
             rec = any(f.recommended for f in usable)
+            if rec:
+                self.rec_rules.append(rule.name)
             box = QCheckBox()
             box.setChecked(rule.name in checked and bool(usable))
             box.setEnabled(bool(usable))
@@ -451,6 +461,28 @@ class MainWindow(QMainWindow):
                     it.setForeground(QBrush(QColor("#888")))
                 self.rule_table.setItem(r, c, it)
         self.rule_table.resizeRowsToContents()
+        if self.rec_all.isChecked():
+            self._tick_recommended()
+
+    def _tick_recommended(self) -> None:
+        """Tick every enabled ★ row. Conflicts: the first rule in registry order wins; rows the user
+        ticked by hand count as taken. The user is told about each rule that had to stay off."""
+        manual = {n for n, b in self.rule_boxes.items() if b.isChecked() and n not in self.rec_rules}
+        want = [n for n in self.rec_rules if self.rule_boxes[n].isEnabled()]
+        chosen, skipped = pick_recommended(want, taken=manual)
+        for n in chosen:
+            self.rule_boxes[n].setChecked(True)
+        for n, other in skipped:
+            self.say(f"{n} not ticked: conflicts with {other}")
+
+    def _rec_all_toggled(self, on: bool) -> None:
+        self.settings.setValue("rules/auto_recommended", on)
+        if on:
+            self._tick_recommended()
+        else:
+            for n in self.rec_rules:
+                if n in self.rule_boxes:
+                    self.rule_boxes[n].setChecked(False)
 
     def _rule_toggled(self, name: str, on: bool) -> None:
         if not on:
@@ -879,15 +911,6 @@ class MainWindow(QMainWindow):
         self.con_ip.setPlaceholderText("192.168.x.y")
         self.con_ip.editingFinished.connect(lambda: self.settings.setValue("console/ip", self.con_ip.text().strip()))
         r.addWidget(self.con_ip, 1)
-        self.con_start_btn = QPushButton("Start live log")
-        self.con_start_btn.clicked.connect(self._con_start)
-        r.addWidget(self.con_start_btn)
-        self.con_stop_btn = QPushButton("Stop")
-        self.con_stop_btn.setEnabled(False)
-        self.con_stop_btn.clicked.connect(self._con_stop)
-        r.addWidget(self.con_stop_btn)
-        self.con_status = QLabel("idle")
-        r.addWidget(self.con_status)
         v.addLayout(r)
         self.con_payloads: dict[str, QLineEdit] = {}
         for key, label in (("klogsrv", "klogsrv"), ("ftpsrv", "ftpsrv"), ("other", "other payload")):
@@ -931,6 +954,17 @@ class MainWindow(QMainWindow):
         b.clicked.connect(lambda: self._con_pick(self.con_dump_dir, folder=True))
         dr.addWidget(b)
         v.addLayout(dr)
+        cr = QHBoxLayout()                       # last of the fill-in rows, right above the log
+        self.con_start_btn = QPushButton("Start live log")
+        self.con_start_btn.clicked.connect(self._con_start)
+        cr.addWidget(self.con_start_btn)
+        self.con_stop_btn = QPushButton("Stop")
+        self.con_stop_btn.setEnabled(False)
+        self.con_stop_btn.clicked.connect(self._con_stop)
+        cr.addWidget(self.con_stop_btn)
+        self.con_status = QLabel("idle")
+        cr.addWidget(self.con_status, 1)
+        v.addLayout(cr)
         sp = QSplitter(Qt.Orientation.Vertical)
         self.con_log = QPlainTextEdit()
         self.con_log.setReadOnly(True)

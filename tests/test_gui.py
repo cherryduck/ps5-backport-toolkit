@@ -54,7 +54,7 @@ def test_analyze_and_build(win, game, tmp_path):
     assert win.bin_table.rowCount() == 1
     assert "absent" in [win.cov_table.item(r, 1).text() for r in range(win.cov_table.rowCount())]
     pro = win.rule_boxes["pro-disable"]
-    assert pro.isEnabled() and not pro.isChecked()                       # recommended, not pre-ticked
+    assert pro.isEnabled() and not pro.isChecked()                       # never recommended (10j), not pre-ticked
     assert not win.rule_boxes["pssr-memory"].isEnabled()                 # nothing detected
     pro.setChecked(True)
     win.out_edit.setText(str(tmp_path / "out"))

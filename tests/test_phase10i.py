@@ -21,8 +21,8 @@ needs_game = pytest.mark.skipif(not (G / "eboot.bin").is_file(), reason="real KH
 def test_prepare_mode6_patch_and_note(tmp_path):
     g = t.prep_game(tmp_path / "6", t.prep(H("55 4889e5 c745e4 06000000 488d75e0")))
     ((st, f),) = t.statuses(g, "savedata-prepare")
-    assert st == "PATCH" and not f.recommended
-    assert "mode 6" in f.title and "not yet seen in community FW4 builds" in f.title and "console-test" in f.title
+    assert st == "PATCH" and f.recommended and "mode 6" in f.title
+    assert "KH HD 2.8" in f.reason and "console-tested" in f.reason
     rep, _ = t.run(g, tmp_path / "6", "savedata-prepare")
     b = Binary.load(tmp_path / "6/out/eboot.bin")
     assert rep.ok and b.read(0x100 + 4, 7) == H("c745e4 00000000")

@@ -103,6 +103,28 @@ def resolve(enabled: set[str], disabled: set[str]) -> list[Rule]:
     return active
 
 
+def pick_recommended(rec: set[str] | list[str], taken: set[str] = frozenset(), blocked: set[str] = frozenset()
+                     ) -> tuple[list[str], list[tuple[str, str]]]:
+    """Choose which recommended rules to switch on, in registry order. A rule is skipped when it is
+    in `blocked`, or conflicts with a rule already in `taken` or chosen earlier (the first in registry
+    order wins). Returns (chosen, [(skipped rule, the rule it conflicts with)]). user-patch is never
+    picked."""
+    reg = registry()
+    chosen: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    have = set(taken)
+    for name, rule in reg.items():
+        if name not in rec or name in have or name in blocked or name == "user-patch":
+            continue
+        clash = next((o for o in have if o in rule.conflicts or name in reg[o].conflicts), None) if have else None
+        if clash:
+            skipped.append((name, clash))
+            continue
+        chosen.append(name)
+        have.add(name)
+    return chosen, skipped
+
+
 def detect_all(ctx: RuleContext) -> list[Finding]:
     out: list[Finding] = []
     for r in registry().values():

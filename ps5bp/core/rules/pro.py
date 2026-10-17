@@ -8,6 +8,8 @@ Pro-flag store):
     In Wolverine *rdi==3 selects the Pro path and *rsi==1 selects 8 CPU threads
     (else 13), so 0/0 = base PS5 with the normal 13 threads.
   * sceKernelIsTrinityMode is replaced by  xor eax, eax ; ret   (as both PPSA11386 kits do)
+Never recommended: a build's declared SDK says nothing about the console's own libkernel, and a
+current console (e.g. Pro 11.60) has these functions, so the Pro path normally runs fine.
 The PLT entry itself becomes the stub.  When coverage proves the NID absent on the
 target FW, the import symbol is also bound locally so the loader doesn't need it.
 """
@@ -42,8 +44,9 @@ class ProDisable(Rule):
                     continue
                 absent = proven_absent(ctx, "libkernel", n)
                 out.append(Finding(self.name, bi.path, f"{LABEL[n]} imported by {bi.path}",
-                                   recommended=absent,
-                                   reason=f"{n} is proven absent on {ctx.target}.xx" if absent else "",
+                                   recommended=False,       # never: see module note
+                                   reason=(f"{LABEL[n]} is absent on {ctx.target}.xx; only matters on a console whose own "
+                                           f"firmware lacks it") if absent else "",
                                    data={"nid": n, "localize": absent}))
         return out
 
