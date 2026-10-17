@@ -88,6 +88,9 @@ class Triage:
     other_errors: list[str] = field(default_factory=list)
     diagnosis: list[str] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
+    ampr_versions: list[str] = field(default_factory=list)    # '[AMPR_EMU] name=libSceAmpr version=...' lines
+    ampr_lines: list[str] = field(default_factory=list)       # other [AMPR_EMU] / apr.index lines (first few)
+    ampr_findings: list[str] = field(default_factory=list)    # explanations of the index lines
 
     def to_text(self) -> str:
         L = [f"title: {self.title_id or '?'}   launches: {len(self.launches)}   crashes: {len(self.crashes)}"]
@@ -106,6 +109,8 @@ class Triage:
                 L.append(s.rstrip())
                 if f.calls_in_fn:
                     L.append(f"{'':63}function also calls: {', '.join(f.calls_in_fn[:8])}")
+        if self.ampr_versions or self.ampr_lines:
+            L += ["", "Ampr emulator log lines:"] + [f"   {x}" for x in self.ampr_versions[:2] + self.ampr_lines[:10]]
         if self.diagnosis:
             L += ["", "diagnosis:"] + [f"   * {d}" for d in self.diagnosis]
         if self.suggestions:
@@ -118,6 +123,41 @@ class Triage:
 
 
 _HEX = r"([0-9a-fA-F]+)"
+
+
+AMPR_ADVICE = ("regenerate it with ps5bp (`ps5bp build ... --ampr-index regen`, or Undo + rebuild with the GUI's "
+               "AMPR index = regenerate), or run the game once from a writable location so the emulator builds it")
+_AMPR_PATTERNS = (
+    (r"apr\.index unavailable|defer runtime build|runtime autobuild disabled",
+     "ampr_emu.index is missing and the emulator did not build one (/app0 is read-only or autobuild is off): "
+     "ship one — " + AMPR_ADVICE),
+    (r"apr\.index (build|save) fail|save rename fail",
+     "the emulator could not write ampr_emu.index (/app0 is read-only or the disk is full): " + AMPR_ADVICE),
+    (r"indexed-path-missing",
+     "ampr_emu.index lists a file that no longer exists: the index is STALE (files were removed or replaced "
+     "after it was built): " + AMPR_ADVICE),
+    (r"apr\.index invalid-counts|invalid-hash-header",
+     "ampr_emu.index is corrupt or truncated: " + AMPR_ADVICE),
+)
+
+
+def ampr_scan(lines: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(version lines, other [AMPR_EMU]/apr.index lines, explanations) from a klog."""
+    versions, other, findings = [], [], []
+    for ln in lines:
+        if "[AMPR_EMU]" not in ln and "apr.index" not in ln and "indexed-path-missing" not in ln:
+            continue
+        txt = ln.strip()[:240]
+        if re.search(r"\[AMPR_EMU\]\s+name=libSceAmpr\s+version=", ln):
+            if txt not in versions:
+                versions.append(txt)
+            continue
+        if txt not in other:
+            other.append(txt)
+        for pat, why in _AMPR_PATTERNS:
+            if re.search(pat, ln) and why not in findings:
+                findings.append(why)
+    return versions, other, findings
 
 
 def parse(text: str) -> Triage:
@@ -133,6 +173,7 @@ def parse(text: str) -> Triage:
         if n:
             t.noise.append(f"{why}  [{n}x '{pat}']")
 
+    t.ampr_versions, t.ampr_lines, t.ampr_findings = ampr_scan(lines)
     i = 0
     while i < len(lines):
         if "A user thread receives a fatal signal" not in lines[i] and not re.match(r"#\s*reason:", lines[i]):
@@ -293,6 +334,7 @@ def _fn_imports(read, stubs, start: int, label, size: int = 0x1800) -> list[str]
 # ---- diagnosis --------------------------------------------------------------------------------
 def diagnose(t: Triage, game_flags: list[str] | None = None) -> None:
     flags = set(game_flags or [])
+    t.diagnosis += [f"Ampr emulator: {x}" for x in t.ampr_findings]
     if not t.crashes:
         t.diagnosis.append("no fatal-signal block found — the game may have hung, or the log does not "
                            "cover the launch (capture klog before starting the game)")

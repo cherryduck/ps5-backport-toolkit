@@ -147,10 +147,16 @@ def cmd_analyze(a) -> int:
     if not a.json and sys.stderr.isatty():
         print("\r" + " " * 72 + "\r", end="", file=sys.stderr)
     if a.json:
-        json.dump(gs.to_dict(), sys.stdout, indent=1)
+        from .core.pipeline import describe_ampr
+        d = gs.to_dict()
+        d["ampr"] = describe_ampr(root)
+        json.dump(d, sys.stdout, indent=1)
         print()
     else:
         print_scan(gs, a.target)
+        from .core.pipeline import ampr_describe_lines, describe_ampr
+        for line in ampr_describe_lines(describe_ampr(root)):
+            print(line)
         if a.target and a.console_fw:
             w = sdk.console_warning(a.target[0], a.target[1], a.console_fw)
             print(f"WARNING: {w}" if w else f"console FW {a.console_fw}: declared SDK "
@@ -170,7 +176,7 @@ def cmd_analyze(a) -> int:
 
 def cmd_build(a) -> int:
     from .core.pipeline import BuildError, BuildOptions, build
-    opts = BuildOptions(target=a.target[0], target_minor=a.target[1], replace_dump=_replace_dump(a), stubs_from=list(a.stubs_from), seeds=list(a.seed), seed_plt_fallback=a.seed_plt_fallback, mode=a.mode, out=Path(a.out) if a.out else None,
+    opts = BuildOptions(target=a.target[0], target_minor=a.target[1], replace_dump=_replace_dump(a), stubs_from=list(a.stubs_from), seeds=list(a.seed), seed_plt_fallback=a.seed_plt_fallback, mode=a.mode, out=Path(a.out) if a.out else None, ampr_index=a.ampr_index,
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
                         strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
                         patches=[Path(x) for x in a.patch], memfix=list(a.memfix),
@@ -430,7 +436,12 @@ def main(argv: list[str] | None = None) -> int:
                          "param.json (majors or major.minor, each higher than --target; not with --mode inplace)")
     bd.add_argument("--replace-dump-fakelib", action="append", default=[], metavar="MODULE[=KIT]",
                     help="use a kit's build instead of the dump's own libSceAmpr / libScePlayGo "
-                         "(removes the stale ampr_emu.index)")
+                         "(ampr_emu.index is kept or refreshed, see --ampr-index)")
+    bd.add_argument("--ampr-index", choices=["auto", "regen", "keep"], default="auto",
+                    help="ampr_emu.index of a game that carries the Ampr emulator: auto (default) writes one if "
+                         "missing and refreshes a stale one, unless ampr_assets.index packs depend on it; regen "
+                         "always rewrites it (refused if that would change the path set of a game with packs, "
+                         "unless --force); keep never touches it, only reports staleness")
     bd.add_argument("--out", help="output folder (required unless --mode inplace)")
     bd.add_argument("--mode", choices=["overlay", "full", "inplace"], default="overlay",
                     help="overlay: changed files + fakelib/ only (default); full: whole game, "

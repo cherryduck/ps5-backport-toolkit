@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import __version__
-from . import dynamic, ledger, sdk
+from . import amprindex, dynamic, ledger, sdk
 from .binary import Binary
 from .coverage import Coverage, analyze as coverage_analyze
 from .evidence import EvidenceDB
@@ -37,6 +37,7 @@ from .nid import split as nid_split
 from .scan import is_loading_layer, GameScan, scan_game
 
 MODES = ("overlay", "full", "inplace")
+AMPR_INDEX_MODES = ("auto", "regen", "keep")
 FICLONE = 0x40049409
 
 
@@ -81,6 +82,7 @@ class BuildOptions:
     seed_plt_fallback: bool = False                                    # compat-stubs: PLT overwrite where a GOT seed is refused
     console_fw: str | None = None                      # '11.60': advice only (warns when SDK trails it)
     also_targets: list[tuple[int, int]] = field(default_factory=list)  # (major, minor): SDK-only siblings
+    ampr_index: str = "auto"                            # ampr_emu.index: auto | regen | keep (10g)
 
 
 @dataclass
@@ -111,6 +113,7 @@ class BuildReport:
     inputs: dict[str, str] = field(default_factory=dict)      # rel -> sha256 of the game's binaries/param.json/fakelib at build start
     outputs: dict[str, str] = field(default_factory=dict)     # rel -> sha256 of every file this build wrote
     libc_check: dict = field(default_factory=dict)            # 10d: output libc vs kit libcs of the same identity (report only)
+    ampr: dict = field(default_factory=dict)                  # 10g: emulator versions + ampr_emu.index action
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1, default=str)
@@ -150,6 +153,8 @@ class BuildReport:
         if self.libc_check:
             from . import libcid
             L += libcid.format_text(self.libc_check)
+        if self.ampr:
+            L += [""] + ampr_text(self.ampr)
         if self.warnings:
             L += ["", "warnings:"] + [f"   {w}" for w in self.warnings]
         if self.memfix_trial is not None:
@@ -160,6 +165,52 @@ class BuildReport:
                   "the game, restore with: ps5bp undo GAME " + self.out + "  (or copy that folder back)"]
         L += ["", f"verified {len(self.verified)} binaries"]
         return "\n".join(L) + "\n"
+
+
+def ampr_text(a: dict) -> list[str]:
+    """Report lines for BuildReport.ampr."""
+    em, ix = a.get("emulator") or {}, a.get("index") or {}
+    L = ["Ampr emulator:"]
+    if em.get("final") is None and em.get("dump") is None:
+        L.append("   none in the game (no fakelib/libSceAmpr.sprx)")
+    else:
+        L.append(f"   version: dump {em.get('dump') or '-'}, chosen {em.get('chosen') or '-'}, final {em.get('final') or '-'}")
+    if ix:
+        L.append(f"   ampr_emu.index: {ix.get('action', '?')}" + (f", {ix['entries']} entries" if ix.get("entries") else "")
+                 + (f"  ({ix['note']})" if ix.get("note") else ""))
+    L.append("   asset packs (ampr_assets.index): " + ("present — the path set must not change" if a.get("packs") else "none"))
+    return L
+
+
+def describe_ampr(game: Path) -> dict:
+    """Read-only facts about a game folder for analyze: emulator version, index and pack presence."""
+    emu = amprindex.find_member(game, "fakelib/libSceAmpr.sprx")
+    idx = amprindex.find_member(game, amprindex.INDEX_NAME)
+    info: dict = {"emulator": amprindex.emulator_version(emu) if emu else None, "index": None,
+                  "entries": 0, "packs": [n for n in amprindex.PACK_NAMES if amprindex.find_member(game, n)]}
+    if idx:
+        try:
+            info["entries"] = len(amprindex.read(idx).entries)
+            info["index"] = "ok"
+        except amprindex.AmprIndexError as e:
+            info["index"] = f"unreadable: {e}"
+    return info
+
+
+def ampr_describe_lines(info: dict) -> list[str]:
+    L = []
+    if info["emulator"]:
+        L.append(f"Ampr emulator: version {info['emulator']}")
+    if info["index"]:
+        L.append(f"ampr_emu.index: {info['entries']} entries" if info["index"] == "ok"
+                 else f"ampr_emu.index: {info['index']}")
+    elif info["emulator"]:
+        L.append("ampr_emu.index: missing (the emulator builds it at first run only if /app0 is writable; "
+                 "ps5bp build writes one)")
+    if info["packs"]:
+        L.append("Ampr asset packs: " + ", ".join(info["packs"]) + " — these are bound to the index's file ids; "
+                 "ps5bp keeps the index's path set")
+    return L
 
 
 def load_retargets() -> list[tuple[str, str, int, str]]:
@@ -489,6 +540,125 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
     return {"out": str(sd), "edits": len(changes)}
 
 
+# ---- ampr_emu.index (10g) ----------------------------------------------------------------
+def ampr_guard(game: Path, opts: BuildOptions, new_rels: list[str], remove: list[str]) -> None:
+    """Before anything is written: --ampr-index regen must not renumber the file ids of asset packs."""
+    if opts.ampr_index != "regen" or opts.force:
+        return
+    pre = amprindex.scan_tree(game, inplace_backups=opts.mode == "inplace")
+    gone = {amprindex.key_for(r) for r in remove}
+    rels = [r for r in list(pre) + list(new_rels) if amprindex.key_for(r) not in gone]
+    if not amprindex.has_emulator(rels) or not amprindex.has_packs(rels):
+        return
+    gidx = amprindex.find_member(game, amprindex.INDEX_NAME)
+    if gidx is None:
+        return
+    keys = {amprindex.key_for("/app0/" + r) for r in rels if not amprindex.is_skipped(r)}
+    try:
+        have = set(amprindex.read(gidx).keys())
+    except amprindex.AmprIndexError as e:
+        raise BuildError(f"--ampr-index regen refused: the game has ampr_assets.index packs and its ampr_emu.index "
+                         f"is unreadable ({e}), so ps5bp cannot tell whether the packs' file ids would change "
+                         "(--force to regenerate anyway)") from None
+    if keys != have:
+        raise BuildError("--ampr-index regen refused: the game has ampr_assets.index packs, which are bound to the "
+                         f"index's file ids, and this build changes the path set ({len(keys - have)} added, "
+                         f"{len(have - keys)} removed). Use --ampr-index keep/auto, or --force to regenerate anyway")
+
+
+def ampr_finish(game: Path, out: Path, opts: BuildOptions, rep: BuildReport, remove: list[str],
+                log: Callable[[str], None]) -> tuple[list[str], list[str]]:
+    """After the files are written: decide and write ampr_emu.index. -> (rels written, problems)."""
+    mode, want = opts.mode, opts.ampr_index
+    tree = amprindex.final_tree(mode, game, out, remove)
+    emu_rel = next((k for k in tree if k.lower() == amprindex.EMU_LIB), None)
+    pack_files = [n for n in amprindex.PACK_NAMES if any(k.lower() == n for k in tree)]
+    chosen = next((f for f in rep.fakelibs if f["module"].startswith("libSceAmpr")), None)
+    em = {"dump": amprindex.emulator_version(amprindex.find_member(game, "fakelib/libSceAmpr.sprx")),
+          "chosen": amprindex.emulator_version(out / chosen["file"]) if chosen else None,
+          "final": amprindex.emulator_version(tree[emu_rel]) if emu_rel else None}
+    packs = amprindex.has_packs(tree)
+    ix: dict = {}
+    rep.ampr = {"emulator": em, "packs": packs, "pack_files": pack_files, "mode": want, "index": ix}
+
+    def warn(msg: str) -> None:
+        rep.warnings.append(msg)
+        log("WARNING: " + msg)
+    if emu_rel is None:
+        ix.update(action="none", note="no Ampr emulator in the final game")
+        return [], []
+    rows = amprindex.rows_for_tree(tree)
+    gidx = amprindex.find_member(game, amprindex.INDEX_NAME)
+    idx, err = None, None
+    if gidx:
+        try:
+            idx = amprindex.read(gidx)
+        except amprindex.AmprIndexError as e:
+            err = str(e)
+    diff = amprindex.compare(idx, rows) if idx else None
+    stale_note = (f"unreadable: {err}" if err else diff.summary() if diff else "")
+    if gidx:
+        ix["had_index"] = True
+    write = False
+    if want == "keep":
+        if gidx:
+            ix.update(action="kept-by-option", entries=len(idx.entries) if idx else 0, note=stale_note or "matches")
+            if stale_note:
+                warn(f"ampr_emu.index is stale ({stale_note}) and was left alone (--ampr-index keep): the emulator "
+                     "will serve wrong sizes. Regenerate with --ampr-index regen")
+        else:
+            ix.update(action="missing-by-option", note="no index written (--ampr-index keep)")
+            warn("no ampr_emu.index and --ampr-index keep: on a read-only /app0 the Ampr emulator cannot build one")
+    elif want == "regen":
+        write = True
+    elif not gidx:
+        write = True
+    elif not stale_note:
+        ix.update(action="kept", entries=len(idx.entries), note="matches the final game (paths and sizes)")
+    elif packs:
+        ix.update(action="kept-stale-packs", entries=len(idx.entries) if idx else 0, note=stale_note)
+        warn("ampr_emu.index does NOT match the final game (" + stale_note + ") but was kept: the game has "
+             "ampr_assets.index packs, which are bound to its file ids"
+             + (" — the PATH SET changed, so the packs will probably not load; do not use this build with them"
+                if diff and diff.paths_differ else " — stat sizes it serves are wrong for the resized files"))
+    else:
+        write = True
+    if not write:
+        return [], []
+    data = amprindex.build(rows, allow_collisions=True)
+    if len({amprindex.key_for(r[0]) for r in rows}) != len(rows):
+        warn("two files differ only in ASCII case: the index keeps the first")
+    name = gidx.name if gidx else amprindex.INDEX_NAME
+    dst = out / name
+    old_sha = ledger.sha256_file(gidx) if gidx else ""
+    if mode == "overlay":
+        if gidx:
+            odir = out.parent / (out.name + ".originals")
+            if not (odir / name).exists():
+                clone_file(gidx, odir / name)
+            rep.originals = str(odir)
+    elif dst.exists() or dst.is_symlink():
+        bak = dst.with_name(dst.name + ".orig")
+        if mode == "inplace" and not bak.exists():
+            os.replace(dst, bak)
+        else:
+            dst.unlink()
+    dst.write_bytes(data)
+    action = "regenerated" if gidx else "created"
+    ix.update(action=action, entries=len(rows), note=stale_note if gidx else "no index in the game")
+    rep.edits.append(Edit(name, "generated", -1, old_sha, hashlib.sha256(data).hexdigest(),
+                          f"{action}: {len(rows)} files" + (f"; was {stale_note}" if stale_note else "")))
+    log(f"ampr_emu.index {action} ({len(rows)} entries) in {out}")
+    problems = []
+    try:
+        back = amprindex.compare(amprindex.parse(dst.read_bytes()), rows)
+        if back:
+            problems.append(f"{name}: written index does not match the tree ({back.summary()})")
+    except amprindex.AmprIndexError as e:
+        problems.append(f"{name}: written index does not parse: {e}")
+    return [name], problems
+
+
 # ---- pipeline ----------------------------------------------------------------------
 def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
           log: Callable[[str], None] = print, cancel: "threading.Event | None" = None,
@@ -508,6 +678,8 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         raise BuildError(f"unsupported target {opts.target} (supported: {sdk.SUPPORTED_TARGETS})")
     if opts.mode not in MODES:
         raise BuildError(f"mode must be one of {MODES}")
+    if opts.ampr_index not in AMPR_INDEX_MODES:
+        raise BuildError(f"ampr_index must be one of {AMPR_INDEX_MODES}")
     also: list[tuple[int, int]] = []
     if opts.also_targets:
         if opts.mode == "inplace":
@@ -720,15 +892,9 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             log(f"keeping the dump's {bi.module} ({bi.path}): emulation layer")
         elif opts.fakelibs and cov:
             rep.warnings.append(f"{bi.path}: the input's own fakelib kept — no kit build of {bi.module or '?'}")
-    stale_index = []
-    if any(f["module"].startswith("libSceAmpr") for f in rep.fakelibs) and \
-            any(bi.role == "fakelib" and bi.module.startswith("libSceAmpr") for bi in gs.binaries):
-        stale_index = [n for n in ("ampr_emu.index", "ampr_emu.index.tmp") if (game / n).exists()]
-    remove = superseded + stale_index
+    remove = superseded
     if remove and opts.mode == "overlay":
-        rep.warnings.append("delete from the installed game (overlay mode cannot remove files): "
-                            + ", ".join(remove) + ("  — the Ampr emulator was replaced, its index must be rebuilt"
-                                                   if stale_index else ""))
+        rep.warnings.append("delete from the installed game (overlay mode cannot remove files): " + ", ".join(remove))
 
     outputs = {rel: (b, raw, b.writes) for rel, (b, raw) in working.items() if b.writes or rel in forced}
 
@@ -751,6 +917,8 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             rep.edits.append(Edit(pj_rel, "param.json", -1, f"{key}={old}", new))
         if changes:
             pj_new = (b"\xef\xbb\xbf" if bom else b"") + new_text.encode("utf-8")
+
+    ampr_guard(game, opts, list(outputs) + list(extra_files) + ([pj_rel] if pj_new is not None else []), remove)
 
     if opts.dry_run:
         rep.ok = True
@@ -809,7 +977,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                 os.replace(src, bak)
                 log(f"moved aside {rel} -> {bak.name}")
     if remove and opts.mode != "overlay":
-        rep.edits += [Edit(rel, "removed", -1, "", "", "superseded / stale after Ampr replacement") for rel in remove]
+        rep.edits += [Edit(rel, "removed", -1, "", "", "superseded by another fakelib") for rel in remove]
     for rel, src in extra_files.items():
         dst = out / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -827,9 +995,11 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                 shutil.copy2(dst, bak)
         dst.write_bytes(pj_new)
 
+    # 5b. ampr_emu.index for the final game (when it carries the Ampr emulator)
+    ampr_written, problems = ampr_finish(game, out, opts, rep, remove, log)
+
     # 6. verify
     ps5_target, _ = sdk.target_pair(opts.target, opts.target_minor)
-    problems = []
     for rel, (_, raw, allowed) in outputs.items():
         data = (out / rel).read_bytes()
         try:
@@ -853,7 +1023,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             json.loads((out / pj_rel).read_bytes().decode("utf-8-sig"))
         except ValueError as e:
             problems.append(f"{pj_rel}: invalid JSON after edit: {e}")
-    rep.outputs = ledger.hash_files(out, list(outputs) + ([pj_rel] if pj_new is not None else []))
+    rep.outputs = ledger.hash_files(out, list(outputs) + ([pj_rel] if pj_new is not None else []) + ampr_written)
     ledger.record(rep.outputs, title_id=gs.title_id, out=str(out), built=rep.started, tool=__version__,
                   target=rep.target_str, warn=lambda m: (log("WARNING: " + m), rep.warnings.append(m)))
     rep.warnings += problems
