@@ -15,10 +15,13 @@ from ..core import sdk
 from ..core.evidence import EvidenceDB, home
 from ..core.pipeline import MODES, BuildOptions
 from ..core.rules import registry
+from ..core.rules.contracts import load as load_contracts
+from .dialogs import LearnDialog, UndoDialog
 from .workers import AnalyzeWorker, BuildWorker, ConsoleBridge, FuncWorker, KitWorker
 
 STATUS_COLOR = {"game": "#5a9", "system": "#5a9", "fakelib": "#49c", "partial": "#c93",
                 "unverified": "#888", "absent": "#d55", "missing": "#d55", "stubbed": "#c93", "dump": "#49c"}
+REPLACEABLE = ("libSceAmpr", "libScePlayGo")
 STAGES = {"scan": "Scanning", "binaries": "Patching", "copy": "Copying game", "write": "Writing"}
 
 
@@ -141,6 +144,23 @@ class MainWindow(QMainWindow):
         pb.addWidget(b)
         pr.addLayout(pb)
         rv.addLayout(pr)
+        sr = QHBoxLayout()
+        sr.addWidget(QLabel("Seeds:"))
+        self.seeds_edit = QLineEdit()
+        self.seeds_edit.setPlaceholderText("contract NIDs, comma-separated (compat-stubs is switched on for you)")
+        manual = [f"  {c.nid}  {c.label()}" for c in load_contracts().values() if c.gate == "manual"]
+        self._seeds_tip = (
+            "--seed: force a GOT stub contract for these NIDs even where the game's firmware has them or the "
+            "gate would refuse. Only NIDs in the contract table are accepted.\n"
+            "Manual-only contracts (applied only when seeded here):\n" + ("\n".join(manual) or "  (none)"))
+        self.seeds_edit.setToolTip(self._seeds_tip)
+        self.seeds_edit.textChanged.connect(self._seeds_changed)
+        sr.addWidget(self.seeds_edit, 1)
+        self.seed_plt = QCheckBox("PLT fallback")
+        self.seed_plt.setToolTip("--seed-plt-fallback: where a GOT seed is refused, overwrite the PLT entry "
+                                 "instead (never silent)")
+        sr.addWidget(self.seed_plt)
+        rv.addLayout(sr)
         self.tabs.addTab(rw, "Fix rules")
         self._fill_rules()
         # kits
@@ -148,11 +168,12 @@ class MainWindow(QMainWindow):
         kv = QVBoxLayout(kw)
         self.kit_label = QLabel()
         kv.addWidget(self.kit_label)
-        self.kit_table = table(["Name", "FW", "Source", "Title", "Files", "Added"])
+        self.kit_table = table(["Name", "FW", "Title", "Files", "PSML overlay", "libc", "Source", "Added"])
         kv.addWidget(self.kit_table, 1)
         kr = QHBoxLayout()
         for text, slot in (("Add kit folder…", lambda: self._add_kit(False)),
-                           ("Add kit zip…", lambda: self._add_kit(True)), ("Remove", self._remove_kit)):
+                           ("Add kit zip…", lambda: self._add_kit(True)), ("Remove", self._remove_kit),
+                           ("Learn from kit…", self._learn_dialog), ("Reindex libc", self._reindex_kits)):
             b = QPushButton(text)
             b.clicked.connect(slot)
             kr.addWidget(b)
@@ -264,11 +285,6 @@ class MainWindow(QMainWindow):
         self.force = QCheckBox("Rebuild existing backport")
         self.force.setToolTip("Accept a game folder whose eboot is already at/below the target SDK, or that already contains files an earlier ps5bp build wrote (--force)")
         row.addWidget(self.force)
-        self.replace_ampr = QCheckBox("Replace dump's Ampr")
-        self.replace_ampr.setToolTip("Use a kit's Ampr emulator instead of the one shipped with the dump "
-                                     "(--replace-dump-fakelib libSceAmpr); the stale ampr_emu.index is removed")
-        self.replace_ampr.toggled.connect(self._invalidate)
-        row.addWidget(self.replace_ampr)
         v.addLayout(row)
         row = QHBoxLayout()
         row.addWidget(QLabel("Also build for:"))
@@ -280,6 +296,20 @@ class MainWindow(QMainWindow):
         row.addWidget(self.also_edit, 1)
         v.addLayout(row)
         row = QHBoxLayout()
+        row.addWidget(QLabel("Dump's fakelibs:"))
+        self.replace_boxes: dict[str, QComboBox] = {}
+        for mod in REPLACEABLE:
+            row.addWidget(QLabel(f"{mod}:"))
+            cb = QComboBox()
+            cb.setToolTip(f"What to do with the {mod} the dump ships (--replace-dump-fakelib): keep it, let "
+                          "the build pick the best kit's, or use one named kit's. Replacing Ampr removes "
+                          "the stale ampr_emu.index. Every launch starts on keep.")
+            cb.currentIndexChanged.connect(self._invalidate)
+            self.replace_boxes[mod] = cb
+            row.addWidget(cb, 1)
+        self.replace_ampr, self.replace_playgo = self.replace_boxes["libSceAmpr"], self.replace_boxes["libScePlayGo"]
+        v.addLayout(row)
+        row = QHBoxLayout()
         self.progress = QProgressBar()
         self.progress.setFormat("")
         row.addWidget(self.progress, 1)
@@ -287,6 +317,10 @@ class MainWindow(QMainWindow):
         self.build_btn.setEnabled(False)
         self.build_btn.clicked.connect(self._build)
         row.addWidget(self.build_btn)
+        self.undo_btn = QPushButton("Undo applied backport…")
+        self.undo_btn.setToolTip("Put a game folder back after a backport was copied over it (ps5bp undo)")
+        self.undo_btn.clicked.connect(self._undo)
+        row.addWidget(self.undo_btn)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel)
@@ -521,7 +555,11 @@ class MainWindow(QMainWindow):
         cfw = self.console_fw.text().strip()
         if cfw:
             sdk.fw_major_of_str(cfw)
-        return BuildOptions(also_targets=also, console_fw=cfw or None, target=self.target.currentData(), mode=mode,
+        seeds = self._seed_list()
+        bad = [n for n in seeds if n not in load_contracts()]
+        if bad:
+            raise ValueError(f"seeds: no stub contract for {', '.join(bad)}")
+        return BuildOptions(also_targets=also, seeds=seeds, seed_plt_fallback=self.seed_plt.isChecked(), console_fw=cfw or None, target=self.target.currentData(), mode=mode,
                             out=None if mode == "inplace" else Path(self.out_edit.text()).expanduser(),
                             force=self.force.isChecked(), rules=self.selected_rules(),
                             replace_dump=self.replace_dump(),
@@ -604,11 +642,8 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.log)
         box = QMessageBox(self)
         box.setWindowTitle("Backport built")
-        box.setText(f"{len(rep.edits)} edit(s), {len(rep.fakelibs)} fakelib(s), "
-                    f"{len(rep.verified)} binaries verified.\n\n{rep.out}"
-                    + (f"\n\nCopying this over the game replaces its files. The originals are saved in\n"
-                       f"{rep.originals}\nand `ps5bp undo GAME {rep.out}` puts them back."
-                       if rep.originals else ""))
+        box.setText(self.built_text(rep))
+        self.last_box = box
         if rep.warnings:
             box.setDetailedText("\n".join(rep.warnings))
         openb = box.addButton("Open folder", QMessageBox.ButtonRole.ActionRole)
@@ -617,6 +652,38 @@ class MainWindow(QMainWindow):
             box.exec()
             if box.clickedButton() is openb:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(rep.out))
+
+    @staticmethod
+    def libc_line(cc: dict) -> str:
+        """One-line summary of BuildReport.libc_check (empty when the build had no libc / no kit store)."""
+        if not cc:
+            return ""
+        n, same, ident = cc.get("kits_with_libc", 0), cc.get("same_identity", 0), cc.get("identical", 0)
+        if not n:
+            return "libc cross-check: no kit has a recorded libc (Kits tab → Reindex libc)."
+        if not same:
+            return f"libc cross-check: no kit libc of this build ({n} kit libc(s) recorded, none the same build)."
+        if ident == same:
+            return f"libc cross-check: matches {ident} kit libc(s) byte for byte (decoded)."
+        if ident:
+            return f"libc cross-check: matches {ident} of {same} same-build kit libc(s), differs from the rest (see Log)."
+        return f"libc cross-check: differs from {same} same-build kit libc(s) (see Log for the ranges)."
+
+    def built_text(self, rep) -> str:
+        t = (f"{len(rep.edits)} edit(s), {len(rep.fakelibs)} fakelib(s), "
+             f"{len(rep.verified)} binaries verified.\n\n{rep.out}")
+        if rep.siblings:
+            t += "\n\nSibling outputs (SDK fields only):\n" + "\n".join(
+                f"  FW {sb['target_str']}: {sb['out']}" for sb in rep.siblings)
+        lc = self.libc_line(rep.libc_check)
+        if lc:
+            t += "\n\n" + lc
+        if rep.console_warning:
+            t += "\n\n⚠ " + rep.console_warning
+        if rep.originals:
+            t += (f"\n\nCopying this over the game replaces its files. The originals are saved in\n"
+                  f"{rep.originals}\nand `ps5bp undo GAME {rep.out}` (or Undo applied backport…) puts them back.")
+        return t
 
     @pyqtSlot()
     def _on_cancelled(self) -> None:
@@ -636,7 +703,41 @@ class MainWindow(QMainWindow):
 
     # ---- memory fix ------------------------------------------------------------------------
     def replace_dump(self) -> dict[str, str | None]:
-        return {"libSceAmpr": None} if self.replace_ampr.isChecked() else {}
+        """module -> None (auto, best kit) | kit name; modules left on "keep dump's" are absent."""
+        out: dict[str, str | None] = {}
+        for mod, cb in self.replace_boxes.items():
+            d = cb.currentData()
+            if d == "auto":
+                out[mod] = None
+            elif isinstance(d, str) and d.startswith("kit:"):
+                out[mod] = d[4:]
+        return out
+
+    def _fill_replace_boxes(self, files) -> None:
+        for mod, cb in self.replace_boxes.items():
+            cur = cb.currentData()
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("keep dump's", "keep")
+            cb.addItem("auto (best kit)", "auto")
+            for name in sorted({f.kit for f in files if f.role == "fakelib" and f.module == mod}):
+                cb.addItem(name, f"kit:{name}")
+            cb.setCurrentIndex(max(0, cb.findData(cur)))
+            cb.blockSignals(False)
+            if cb.currentData() != cur and cur is not None:
+                self._invalidate()                        # the chosen kit went away
+
+    def _seed_list(self) -> list[str]:
+        out: list[str] = []
+        for x in self.seeds_edit.text().replace(",", " ").split():
+            if x not in out:
+                out.append(x)
+        return out
+
+    def _seeds_changed(self, *_) -> None:
+        bad = [n for n in self._seed_list() if n not in load_contracts()]
+        self.seeds_edit.setStyleSheet("background: #fdd" if bad else "")
+        self.seeds_edit.setToolTip(self._seeds_tip + (f"\n\nNo contract for: {', '.join(bad)}" if bad else ""))
 
     def _mf_clear(self, *_) -> None:
         """Site ids belong to one eboot: forget them when the game folder changes."""
@@ -932,14 +1033,19 @@ class MainWindow(QMainWindow):
         db = EvidenceDB()
         try:
             kits = db.kits()
-            counts = {k.name: len(db.kit_files(k.name)) for k in kits}
+            files = db.kit_files()
+            counts = {k.name: sum(1 for f in files if f.kit == k.name) for k in kits}
+            overlay = {k.name for k, *_ in db.psml_overlays()}
+            libc = {r.kit: r.identity[:12] for r in db.libc_records()}
         finally:
             db.close()
         self.kit_label.setText(f"Kit library: {home()} — {len(kits)} kit(s). A kit is an existing backport's "
                                f"files; it supplies fakelibs and evidence of which functions each FW has.")
         fill(self.kit_table, [[k.name, f"{k.fw}.xx" + (f" (tested {k.tested_fw})" if k.tested_fw else ""),
-                               k.source, k.title_id, counts[k.name], k.added]
+                               k.title_id, counts[k.name], "yes" if k.name in overlay else "—",
+                               libc.get(k.name, "—"), k.source, k.added]
                               for k in kits])
+        self._fill_replace_boxes(files)
 
     def _add_kit(self, is_zip: bool) -> None:
         if is_zip:
@@ -989,8 +1095,30 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _on_kit_error(self, msg: str) -> None:
         self._release("kit_worker")
+        self.last_error = msg
         self.say(f"kit operation failed: {msg}")
-        QMessageBox.critical(self, "Kit", msg)
+        if not getattr(self, "_headless", False):
+            QMessageBox.critical(self, "Kit", msg)
+
+    def _learn_dialog(self) -> LearnDialog:
+        d = LearnDialog(self, self.game_edit.text().strip(), getattr(self, "_headless", False))
+        self.learn_dlg = d
+        if not getattr(self, "_headless", False):
+            d.exec()
+        return d
+
+    def _reindex_kits(self) -> None:
+        self._run_kit(KitWorker("reindex"))
+
+    def _undo(self) -> UndoDialog:
+        d = UndoDialog(self, self.game_edit.text().strip(), getattr(self, "_headless", False))
+        self.undo_dlg = d
+        d.applied = False
+        if not getattr(self, "_headless", False):
+            d.exec()
+            if d.applied:
+                self.say("undo applied to " + d.game_edit.text().strip())
+        return d
 
     def closeEvent(self, e) -> None:                             # noqa: N802
         self._con_stop()

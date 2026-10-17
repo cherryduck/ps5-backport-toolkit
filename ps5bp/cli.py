@@ -399,51 +399,9 @@ def cmd_kit(a) -> int:
         if not db.kits():
             print("no kits")
     elif a.kit_cmd == "learn":
-        import json as _json
-        from .core.learn import learn
-        orig = Path(a.original)
-        tid = ""
-        pj = orig / "sce_sys/param.json"
-        if pj.is_file():
-            from .core.paramjson import ParamJson
-            try:
-                tid = ParamJson.load(pj).title_id
-            except ValueError:
-                pass
-        reps, recipes = learn(orig, Path(a.kit), tid)
-        totals: dict[str, int] = {}
-        for r in reps:
-            for k, v in r.classes.items():
-                totals[k] = totals.get(k, 0) + v
-            if r.problem:
-                print(f"{r.file}: {r.problem}")
-            for e in r.edits:
-                print(f"{r.file}: {e['va']}  {e['old']} -> {e['new']}   {e['note']}")
-        print("\nchanged bytes by kind: " + ", ".join(f"{k} {v}" for k, v in sorted(totals.items())))
-        print("  sdk / imports: done by every build;  plt-stub: --rule kit-stubs (after `kit add`);  "
-              "mapflex: --rule mapflex-flags;  savedata: --rule savedata-mount;  wwise: --rule wwise-71")
-        named = sorted(k for k in totals if k not in ("sdk", "plt-stub", "imports", "mapflex", "savedata", "wwise",
-                                                      "game"))
-        if named:
-            print("  also explained by their rules (--rule NAME): " + ", ".join(f"{k} ({totals[k]} B)" for k in named))
-        if totals.get("game"):
-            print("  game: edits no generic rule explains (listed above) — each is a candidate for a new "
-                  "rule; --recipe writes them as a recipe for this game only")
-        hdr = sorted({h for r in reps for h in r.header_only})
-        if hdr:
-            print(f"  not reproduced: ELF header edits ({', '.join(hdr)[:120]}) — re-signing artefacts")
-        if not a.recipe:
-            if not recipes:
-                print("nothing left unexplained: every change is reproduced by generic handling")
-            return 0
-        outd = Path(a.out)
-        outd.mkdir(parents=True, exist_ok=True)
-        for rec in recipes:
-            f = outd / f"{rec['name']}.json"
-            f.write_text(_json.dumps(rec, indent=1))
-            print(f"wrote {f}  ({len(rec['ops'])} edit(s)) — apply with: ps5bp build ... --patch {f}")
-        if not recipes:
-            print("no game-specific edits to learn")
+        from .core.learn import learn_report
+        for line in learn_report(Path(a.original), Path(a.kit), a.recipe, Path(a.out)):
+            print(line)
     elif a.kit_cmd == "remove":
         print("removed" if db.remove_kit(a.name) else f"no kit '{a.name}'")
     return 0
