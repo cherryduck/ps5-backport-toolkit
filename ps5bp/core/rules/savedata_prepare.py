@@ -1,4 +1,4 @@
-"""savedata-prepare: sceSaveDataPrepare request mode 2 / 3 -> 0.
+"""savedata-prepare: sceSaveDataPrepare request mode 2 / 3 / 6 -> 0.
 
 Newer SDKs request a prepare mode (dword at request+4) that a 4.xx system does not know; the
 community FW4 backports set it back to 0. Detected per call of sceSaveDataPrepare
@@ -7,7 +7,10 @@ community FW4 backports set it back to 0. Detected per call of sceSaveDataPrepar
     there                                                              -> PATCH (imm32 -> 0)
   * exactly one dword store of 3 after the request was zeroed by a vector store (the
     `vxorps; vmovups [req], ymm; ... mov [req+4], 3` form)             -> PATCH (imm32 -> 0)
-  * a dword store of 0 (and no 2/3)                                    -> DONE
+  * exactly one dword store of 6 (single-store guards like mode 2; seen in KH HD 2.8, not yet in
+    community FW4 builds - console-test)                               -> PATCH (imm32 -> 0)
+  * any other non-zero immediate store                                 -> UNKNOWN (value shown)
+  * a dword store of 0 (and no 2/3/6)                                    -> DONE
   * several candidates / other non-zero writers overlap the field      -> UNKNOWN (refused)
   * mode copied from elsewhere (not an immediate)                      -> nothing to patch, not reported
 """
@@ -43,7 +46,8 @@ def sites(b, base: int) -> list[dict]:
         ov = [s for s in flow.stores if s.base == tok and s.off < hi and s.off + s.size > lo]
         nz = [s for s in ov if not s.zero]
         exact = [s for s in ov if s.size == 4 and s.off == lo and s.imm is not None]
-        cand = [s for s in exact if s.imm in (2, 3)]
+        cand = [s for s in exact if s.imm in (2, 3, 6)]
+        other = [s for s in exact if s.imm not in (0, 2, 3, 6)]
         if len(cand) > 1:
             out.append({"call": call, "status": UNKNOWN, "why": f"{len(cand)} mode stores for one call"})
         elif len(cand) == 1:
@@ -57,6 +61,8 @@ def sites(b, base: int) -> list[dict]:
                 out.append({"call": call, "status": UNKNOWN, "why": "mode 3 but the request was not vector-zeroed first"})
             else:
                 out.append({"call": call, "status": PATCH, "va": s.insn.address, "len": s.insn.size, "imm": s.imm})
+        elif other:
+            out.append({"call": call, "status": UNKNOWN, "why": f"unexpected mode value {other[0].imm} at {other[0].insn.address:#x}"})
         elif [s for s in exact if s.imm == 0] and len(nz) == 0:
             s = [s for s in exact if s.imm == 0][0]
             out.append({"call": call, "status": DONE, "va": s.insn.address, "len": s.insn.size, "imm": 0})
@@ -65,7 +71,7 @@ def sites(b, base: int) -> list[dict]:
 
 class SavedataPrepare(EditRule):
     name = "savedata-prepare"
-    summary = "sceSaveDataPrepare request mode 2/3 -> 0 (mode unknown to 4.xx)"
+    summary = "sceSaveDataPrepare request mode 2/3/6 -> 0 (mode unknown to 4.xx)"
 
     def detect(self, ctx: RuleContext) -> list[Finding]:
         out = []
@@ -79,7 +85,9 @@ class SavedataPrepare(EditRule):
                     seen.add(va)
                 if r["status"] == PATCH:
                     out.append(finding(self.name, bi.path, f"{va:#x}: SaveDataPrepare mode {r['imm']} -> 0 "
-                                       f"(call {r['call']:#x})", PATCH,
+                                       f"(call {r['call']:#x})"
+                                       + ("; mode 6: not yet seen in community FW4 builds — console-test"
+                                          if r["imm"] == 6 else ""), PATCH,
                                        edits=[(va + r["len"] - 4, f"{r['imm']:08x}"[6:] + "000000", "00000000",
                                                f"SaveDataPrepare mode {r['imm']} -> 0")]))
                 elif r["status"] == DONE:
