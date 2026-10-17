@@ -14,3 +14,4 @@ dist/
 *.psp
 fixtures/
 .venv-bundle/
+.venv-shared
