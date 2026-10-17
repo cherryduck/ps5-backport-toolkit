@@ -70,8 +70,10 @@ def registry() -> dict[str, Rule]:
     from .mapflex_flags import MapflexFlags
     from .savedata_mount import SavedataMount
     from .wwise71 import Wwise71
-    rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), KitStubs(), MapflexFlags(), StubAbsent(),
-             UserPatch()]
+    from .compat_stubs import CompatStubs
+    from .set3_nonfatal import Set3Nonfatal
+    rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), Set3Nonfatal(), KitStubs(), CompatStubs(),
+             MapflexFlags(), StubAbsent(), UserPatch()]
     return {r.name: r for r in rules}
 
 

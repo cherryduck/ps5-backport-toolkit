@@ -165,7 +165,7 @@ def cmd_analyze(a) -> int:
 
 def cmd_build(a) -> int:
     from .core.pipeline import BuildError, BuildOptions, build
-    opts = BuildOptions(target=a.target[0], target_minor=a.target[1], replace_dump=_replace_dump(a), stubs_from=list(a.stubs_from), mode=a.mode, out=Path(a.out) if a.out else None,
+    opts = BuildOptions(target=a.target[0], target_minor=a.target[1], replace_dump=_replace_dump(a), stubs_from=list(a.stubs_from), seeds=list(a.seed), seed_plt_fallback=a.seed_plt_fallback, mode=a.mode, out=Path(a.out) if a.out else None,
                         fakelibs=not a.no_fakelibs, retarget=not a.no_retarget, force=a.force,
                         strict=a.strict, dry_run=a.dry_run, rules=set(a.rule), no_rules=set(a.no_rule),
                         patches=[Path(x) for x in a.patch], memfix=list(a.memfix),
@@ -385,6 +385,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="generated memory fix (see `ps5bp memfix GAME`); records a trial")
     bd.add_argument("--stubs-from", action="append", default=[], metavar="KIT",
                     help="kit-stubs: use only stubs from this kit (repeatable)")
+    bd.add_argument("--seed", action="append", default=[], metavar="NID",
+                    help="compat-stubs: seed this contract NID (also the manual-only ones); implies --rule compat-stubs")
+    bd.add_argument("--seed-plt-fallback", action="store_true",
+                    help="compat-stubs: where a GOT seed is refused, overwrite the PLT entry instead (never silent)")
     bd.add_argument("--klog", help="crash log: page-split hooks only the callers on its crash path")
     mf = sub.add_parser("memfix", help="find failing memory allocations, generate fixes, track console trials")
     mf.add_argument("game")
