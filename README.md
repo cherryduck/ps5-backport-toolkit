@@ -107,6 +107,17 @@ enabled fix rules. SELFs are patched in place — no re-signing. Every output bi
 re-parsed and diffed against its input; a byte changed outside a recorded edit fails the
 build. `backport-report.json/.txt` lists every edit. Packaging (sce_sys, PKG) is up to you.
 
+**SELF digest.** A fake-signed SELF carries a 32-byte digest in its EX_INFO block (right after the
+ELF header + program headers; `Binary.ex_info()`). It depends on the file content, but its algorithm
+cannot be recovered from the SELF (it is not SHA-256 of any file range, segment subset or ELF image
+rebuilt from the SELF — the original ELF has data the SELF does not keep), so ps5bp cannot recompute it
+and leaves it as the input had it. That is deliberate and verified: the build checks that nothing
+outside a recorded edit changes, so the digest stays stale after any edit — SDK downgrades included,
+and ps5bp builds boot on a console (ACE COMBAT 8, 4.00 SDK build on a Pro 11.60), so the loader
+does not enforce it. Community libc builds differ from a ps5bp-edited baseline libc in exactly those 32
+bytes (plus heap-flag bytes where they patched them). If a signing flow elsewhere checks the digest,
+re-sign the output there.
+
 ## Fix rules
 
 ```
@@ -127,8 +138,13 @@ Every rule is off by default; `build` / the GUI say which are recommended and wh
 | `compat-stubs` | **GOT-seed** stubs from a per-NID contract table (`ps5bp/data/stub_contracts.json`): for imports the target FW lacks, a ≤15-byte stub goes into an int3 run (or a grown segment end) and the import's lazy GOT slot (`PLT+6`) is pointed at it. PLT entry, import symbol and relocation stay, so a firmware that exports the NID binds natively and the same build works on old and new FW. Contracts: OperationMode (`*rdi=2,*rsi=0`), IsTrinityMode, `scePadIsRemoteController` (writes the out-bool), VRR peg/unpeg, VRR status init/register/unregister (only if every caller ignores or error-checks the result), `GetVrrStatus` (zero-fills 0x40 bytes — only if every caller owns an initialised ≥0x40 frame buffer), WQHD, VideoOut latency ×2, `sceSaveDataConvert` (0x809F0008), Coredump user string, SharePlay prohibit, Np trials flag, Acm priority, write-throttling query (0x80020003; only if every caller compares it), libc thread-exit purge (libc.prx only), `sceAudioOut2Set3DLatency` below 6.00. Seeded when coverage proves the NID absent on the target, else when the declared SDK is below the table's first-exported lead. Status per site: PATCH / DONE / UNKNOWN (refused, reason shown — never silently falls back). `--seed NID` forces a contract (the only way for the manual ones: NetCtl link-down, Ambisonics coefficients); `--seed-plt-fallback` allows a PLT overwrite where a GOT seed is refused. Skips NIDs owned by an enabled `pro-disable` / `pssr-memory` / `kit-stubs`. Never recommended yet (no console result recorded). |
 | `set3-nonfatal` | Targets 6–9 only: `sceAudioOut2Set3DLatency` exists but rejects mode>1 (0x80268001), which Wwise treats as fatal (no sound). At every call `call; test eax,eax; je X` → `jmp X`. All callers must have exactly that shape, else nothing is patched. Untested on 6–9 hardware. |
 | `mapflex-flags` | Clear flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory` (DLPS's AC8 fix; their older 11386 build kept it). |
-| `savedata-mount` | `sceSaveDataMount3` param qword +0x18 = -1 -> 0 at every call whose struct is built in the calling function. Fixes CE-107098-5 when saving on 4.xx (console-confirmed on ACE COMBAT 8). Recommended from kit evidence: DLPS FW4 kits set it to 0 (AC8, PPSA11386), PSVIETHOA's FW6 PPSA11386 kept -1. |
+| `savedata-mount` | `sceSaveDataMount3` param qword +0x18 (systemBlocks) = -1 -> 0. Finds the request through register alias chains and local wrapper functions (the request is the wrapper's argument: its callers are analysed), needs a non-zero store to the blocks field (+0x10) and an `ff ff ff ff`-ending encoding, refuses anything ambiguous. For Unity `SaveData.prx` plugins it also turns the 16-byte vector copy of blocks+systemBlocks into the 8-byte copy (rbx / r14 / r15 forms; the request must have been zeroed first, exactly one copy in the file). Fixes CE-107098-5 when saving on 4.xx (console-confirmed on ACE COMBAT 8). Recommended from kit evidence: DLPS FW4 kits set it to 0 (AC8, PPSA11386), PSVIETHOA's FW6 PPSA11386 kept -1. |
 | `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) -> 7.1 where the game requests it (lookup tables left alone). Recommended on 4.xx: console-tested on ACE COMBAT 8 — no sound without it, sound with it (DLPS's FW4 PPSA11386 kit kept 7.1.4; console tests beat kit observations). |
+| `gamepresets-28` | `sceUserServiceGetGamePresets` request size `0x30 -> 0x28` (imm32 of the size store, incl. the form where a helper initialises the request: its memset length is left alone). 4.xx rejects the 0x30 request with 0x80960005. Already `0x28` -> DONE; anything else -> UNKNOWN, refused. Recommended for a declared 4.xx target (observed working on 4.03/4.50 in community FW4 backports). |
+| `tls-atexit` | libc `__cxa_thread_atexit` is `push rbp; mov rbp,rsp; call PLT(qBS714-Jr3g); pop rbp; ret` where the import exists only from 11.00; the call is retargeted to libc's own `__cxa_atexit` (destructors then run at process exit). Generic: needs both exports and exactly that body. Recommended for a declared target below 11. Validated on three libc builds of community FW4 backports. |
+| `savedata-prepare` | `sceSaveDataPrepare` request mode (dword +4) 2 -> 0, or 3 -> 0 when the request was vector-zeroed first; exactly one store per call, a mode copied from elsewhere is left alone. Not recommended automatically. |
+| `savedata-dirsearch` | 4.xx only: `sceSaveDataDirNameSearch2` imported without `DirNameSearch` -> the import is renamed to `DirNameSearch`; both imported -> the lazy GOT slot of Search2 is pointed at Search's PLT stub. A lead from community backports, not console-proved: never recommended automatically. |
+| `frostbite-8ch` | EA/Frostbite AudioOut2 12 -> 8 channels (`mov r9d,0x30c -> 0x208`, the 0xC00 format store, the channel count) in the three layouts known from community FW4 backports; every anchor must match a layout completely or the binary is refused. Recommended for a declared 4.xx target. |
 | `stub-absent` | Every other import proven absent on the target -> `return 0`, bound locally. Blunt. |
 | `user-patch` | Apply recipe files (`--patch`). |
 

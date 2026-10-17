@@ -55,3 +55,21 @@ def proven_absent(ctx, module: str, nid: str) -> bool:
         return False
     m = next((m for m in ctx.cov.modules if m.module == module), None)
     return bool(m) and nid in m.absent
+
+
+def calls_to_import(sc, nid_: str) -> list[int]:
+    """Direct calls to an import's PLT stub or to a `jmp stub` thunk (sc: memsite.Scanner)."""
+    d = dynamic.parse(sc.b)
+    if not d:
+        return []
+    stub = stub_for(plt_stubs(sc.b, d, sc.base), nid_)
+    if stub is None:
+        return []
+    out = list(sc.calls_to(stub))
+    import numpy as np
+    for t in np.unique(sc.call_tgt):
+        t = int(t)
+        if t != stub and sc.cva <= t < sc.cva + len(sc.code) - 5 and sc.code[t - sc.cva] == 0xE9:
+            if t + 5 + int.from_bytes(sc.code[t - sc.cva + 1:t - sc.cva + 5], "little", signed=True) == stub:
+                out += sc.calls_to(t)
+    return sorted(out)

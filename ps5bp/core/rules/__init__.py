@@ -72,8 +72,14 @@ def registry() -> dict[str, Rule]:
     from .wwise71 import Wwise71
     from .compat_stubs import CompatStubs
     from .set3_nonfatal import Set3Nonfatal
-    rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), Set3Nonfatal(), KitStubs(), CompatStubs(),
-             MapflexFlags(), StubAbsent(), UserPatch()]
+    from .gamepresets import GamePresets28
+    from .tls_atexit import TlsAtexit
+    from .savedata_prepare import SavedataPrepare
+    from .savedata_dirsearch import SavedataDirSearch
+    from .frostbite_8ch import Frostbite8ch
+    rules = [ProDisable(), PssrMemory(), SavedataMount(), Wwise71(), Set3Nonfatal(), GamePresets28(), TlsAtexit(),
+             SavedataPrepare(), SavedataDirSearch(), Frostbite8ch(), KitStubs(), CompatStubs(), MapflexFlags(),
+             StubAbsent(), UserPatch()]
     return {r.name: r for r in rules}
 
 
