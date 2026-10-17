@@ -162,12 +162,22 @@ Building again into the same output folder replaces the earlier build (the GUI a
 first); any other non-empty folder is refused. `<out>.originals/` is never deleted: if
 an earlier overlay was copied over the game, it holds the only untouched copies.
 
+Safety: every file ps5bp writes is hashed into a per-user ledger (`$PS5BP_HOME/applied.json`,
+next to the kits). A build hashes the game's binaries, `param.json` and `fakelib/*` first and
+refuses (`--force` overrides) if any is a known ps5bp output, i.e. an earlier overlay was copied over
+the game and those files are not originals. A corrupt ledger is kept as `applied.json.bak` and
+restarted. `--dry-run` records nothing. The input hashes go into `backport-report.json`.
+
 ## Undo
 
 Overlay builds save the game's copy of every file they replace to `<out>.originals/`
 (beside the output, so it isn't copied into the game). If an overlay was copied over the
 game, `ps5bp undo GAME OUT [OLDER_OUT ...]` (newest first) restores it — from the saved
 originals, or, for builds without them, by reversing every edit in the reports.
+Before restoring, `undo` checks that every file it overwrites still has the build's output hash
+and that the result has the recorded input hash; otherwise it refuses (`--force` overrides). Reports
+written before this check have no hashes and undo as before. Game paths are matched
+case-insensitively if the exact path is missing (an ambiguous match is an error).
 
 ## Memory fixes (`memfix`)
 

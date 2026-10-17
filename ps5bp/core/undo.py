@@ -10,6 +10,11 @@ stacked (an overlay copied over the game, then another).
                             fakelib the game shipped itself, that file can't be restored
                             from the report: use <out>.originals/ if present)
   removed                   restored from <name>.orig if present, else reported
+Verification (reports with `inputs`/`outputs` hashes): before a report's files are touched each must
+still equal the build's OUTPUT hash (still the backported file, not edited since), and after
+reversal each must equal the recorded INPUT hash. Mismatch -> refused, unless force. Older
+reports without the hashes undo as before (a note says verification was skipped). Game paths are
+matched case-insensitively when the exact path is absent (unambiguous only).
 Overlay builds save the input's copy of every file they replace in <out>.originals/
 (recorded in the report); when present those are restored as-is, which also covers caves
 and replaced dump fakelibs. Without it, code caves (edits with no old bytes) are refused: they also grew a
@@ -19,9 +24,12 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .ledger import AmbiguousMember, resolve_member
 
 
 class UndoError(Exception):
@@ -41,9 +49,16 @@ def _bytes(kind: str, s: str) -> bytes:
     return s.encode() if kind == "retarget" else bytes.fromhex(s)
 
 
-def plan_undo(game: Path, reports: list[Path]) -> UndoPlan:
+def plan_undo(game: Path, reports: list[Path], force: bool = False) -> UndoPlan:
     up = UndoPlan()
     cur: dict[str, bytearray] = {}
+
+    def R(rel: str) -> str:
+        """the report's path as spelled in the game folder"""
+        try:
+            return resolve_member(game, rel)
+        except AmbiguousMember as e:
+            raise UndoError(str(e)) from None
 
     def content(rel: str) -> bytearray:
         if rel not in cur:
@@ -53,30 +68,70 @@ def plan_undo(game: Path, reports: list[Path]) -> UndoPlan:
             cur[rel] = bytearray(p.read_bytes())
         return cur[rel]
 
+    def sha_now(rel: str) -> str | None:
+        if rel in cur:
+            return hashlib.sha256(cur[rel]).hexdigest()
+        p = game / rel
+        return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+
+    def verify(rep: dict, rels: list[str], key: str, what: str) -> None:
+        """rels (game spelling) must hash to rep[key][report spelling]"""
+        want = rep.get(key)
+        if not want:
+            return
+        bad = []
+        for rel in rels:
+            exp = want.get(rel) or next((v for k, v in want.items() if k.casefold() == rel.casefold()), None)
+            if exp is None:
+                continue
+            got = sha_now(rel)
+            if got is not None and got != exp:
+                bad.append(rel)
+        if bad:
+            msg = f"{what}: " + ", ".join(sorted(bad))
+            if not force:
+                raise UndoError(msg + " (use --force to override)")
+            up.notes.append("--force: " + msg)
+
     gone: set[str] = set()
     reps = [json.loads((rp / "backport-report.json" if rp.is_dir() else rp).read_text()) for rp in reports]
     for n, rep in enumerate(reps):
+        if not rep.get("inputs") or not rep.get("outputs"):
+            up.notes.append(f"report {n + 1} ({rep.get('out', '?')}) has no input/output hashes — "
+                            "hash verification skipped")
         odir = Path(rep["originals"]) if rep.get("originals") else None
+        touched: list[str] = []                       # game files this report rewrites (for the post-check)
         if odir is not None and odir.is_dir():
             # exact copies of the input: restore those files wholesale, delete the rest it added
-            have = {str(Path(dp, f).relative_to(odir)) for dp, _, fs in os.walk(odir) for f in fs}
+            have = {R(str(Path(dp, f).relative_to(odir))): str(Path(dp, f).relative_to(odir))
+                    for dp, _, fs in os.walk(odir) for f in fs}
+            verify(rep, sorted(have), "outputs", "these game files are not the backported files this build wrote "
+                   "(changed since it was applied, or another build is on top)")
             for rel in sorted(have):
-                cur[rel] = bytearray((odir / rel).read_bytes())
+                cur[rel] = bytearray((odir / have[rel]).read_bytes())
+                touched.append(rel)
                 gone.discard(rel)
                 if rel in up.deletes:
                     up.deletes.remove(rel)
             for e in rep["edits"]:
-                if e["kind"] == "fakelib" and e["file"] not in have and (game / e["file"]).exists() \
-                        and e["file"] not in gone:
-                    up.deletes.append(e["file"])
-                    gone.add(e["file"])
-                    cur.pop(e["file"], None)
+                f = R(e["file"])
+                if e["kind"] == "fakelib" and f not in have and (game / f).exists() and f not in gone:
+                    verify(rep, [f], "outputs", "this fakelib is not the one the build installed")
+                    up.deletes.append(f)
+                    gone.add(f)
+                    cur.pop(f, None)
             up.count += len(rep["edits"])
+            verify(rep, [t for t in touched if t not in gone], "inputs", "restored files do not match the build's "
+                   "recorded inputs")
             continue
-        installed = {e["file"] for e in rep["edits"] if e["kind"] == "fakelib"}
-        older = {e["file"] for r in reps[n + 1:] for e in r["edits"] if e["kind"] == "fakelib"}
+        installed = {R(e["file"]) for e in rep["edits"] if e["kind"] == "fakelib"}
+        older = {R(e["file"]) for r in reps[n + 1:] for e in r["edits"] if e["kind"] == "fakelib"}
+        pre = sorted({R(e["file"]) for e in rep["edits"] if e["kind"] not in ("fakelib", "removed")} - installed)
+        verify(rep, pre + sorted(x for x in installed if (game / x).exists() and x not in gone), "outputs",
+               "these game files are not the backported files this build wrote (changed since it was applied, "
+               "or another build is on top)")
         for e in reversed(rep["edits"]):
-            rel, kind = e["file"], e["kind"]
+            rel, kind = R(e["file"]), e["kind"]
             if rel in installed and kind != "fakelib":
                 continue                                    # whole file goes away anyway
             if kind == "fakelib":
@@ -90,9 +145,9 @@ def plan_undo(game: Path, reports: list[Path]) -> UndoPlan:
                 up.count += 1
                 continue
             if kind == "removed":
-                bak = game / (rel + ".orig")
-                if bak.exists():
-                    up.restores.append((rel + ".orig", rel))
+                bak_rel = R(rel + ".orig")
+                if (game / bak_rel).exists():
+                    up.restores.append((bak_rel, rel))
                 else:
                     up.notes.append(f"{rel}: was removed by the build and has no .orig — restore it from the dump source")
                 up.count += 1
@@ -120,6 +175,8 @@ def plan_undo(game: Path, reports: list[Path]) -> UndoPlan:
                                 f"{bytes(data[o:o + len(new)]).hex()[:32]} — wrong report order or file changed")
             data[o:o + len(new)] = old
             up.count += 1
+        verify(rep, [r for r in pre if r in cur and r not in gone], "inputs",
+               "restored files do not match the build's recorded inputs")
     up.writes = {k: v for k, v in cur.items() if k not in gone}
     return up
 

@@ -261,7 +261,7 @@ class MainWindow(QMainWindow):
         self.out_btn.clicked.connect(self._browse_out)
         row.addWidget(self.out_btn)
         self.force = QCheckBox("Rebuild existing backport")
-        self.force.setToolTip("Accept a game folder whose eboot is already at/below the target SDK (--force)")
+        self.force.setToolTip("Accept a game folder whose eboot is already at/below the target SDK, or that already contains files an earlier ps5bp build wrote (--force)")
         row.addWidget(self.force)
         self.replace_ampr = QCheckBox("Replace dump's Ampr")
         self.replace_ampr.setToolTip("Use a kit's Ampr emulator instead of the one shipped with the dump "

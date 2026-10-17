@@ -27,7 +27,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from . import dynamic, sdk
+from .. import __version__
+from . import dynamic, ledger, sdk
 from .binary import Binary
 from .coverage import Coverage, analyze as coverage_analyze
 from .evidence import EvidenceDB
@@ -104,6 +105,8 @@ class BuildReport:
     siblings: list[dict] = field(default_factory=list)   # SDK-only siblings written from this build
     sibling_of: str = ""                                 # sibling reports: the parent output folder
     sibling_edits: list[dict] = field(default_factory=list)   # sibling reports: changes vs the parent
+    inputs: dict[str, str] = field(default_factory=dict)      # rel -> sha256 of the game's binaries/param.json/fakelib at build start
+    outputs: dict[str, str] = field(default_factory=dict)     # rel -> sha256 of every file this build wrote
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=1, default=str)
@@ -466,11 +469,15 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
             edits.append(Edit(c["file"], "sdk", c["offset"], c["old"], c["new"], c["what"] + " (sibling)"))
         sib_edits.append({"file": c["file"], "what": c["what"], "old": c["old"], "new": c["new"]})
     import dataclasses
+    s_outputs = ledger.hash_files(sd, [str((Path(dp) / f).relative_to(sd)) for dp, _, fns in os.walk(sd) for f in fns])
     srep = dataclasses.replace(rep, target=major, out=str(sd), edits=edits, verified=verified, siblings=[],
+                               outputs=s_outputs,
                                originals=sib_originals, sibling_of=str(out), sibling_edits=sib_edits,
                                target_str=sdk.target_str(major, minor), warnings=list(rep.warnings), ok=True)
     (sd / "backport-report.json").write_text(srep.to_json())
     (sd / "backport-report.txt").write_text(srep.to_text())
+    ledger.record(s_outputs, title_id=rep.title_id, out=str(sd), built=rep.started, tool=__version__,
+                  target=srep.target_str, warn=log)
     log(f"sibling FW {sdk.target_str(major, minor)}: {len(changes)} SDK field edit(s), diff check passed")
     return {"out": str(sd), "edits": len(changes)}
 
@@ -558,6 +565,17 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     if gs.eboot.sdk_ps5 is not None and gs.eboot.sdk_ps5 <= ps5_want and not opts.force:
         raise BuildError(f"eboot.bin is already SDK {gs.eboot.sdk_str()} (already backported?) — "
                          "use --force to rebuild it")
+    pj_rel = "sce_sys/param.json"
+    rep.inputs = ledger.hash_files(game, [bi.path for bi in gs.binaries] + [pj_rel])
+    seen = ledger.known_outputs(rep.inputs, warn=lambda m: (log("WARNING: " + m), rep.warnings.append(m)))
+    if seen and not opts.force:
+        lines = [f"  {rel}  <- {e['path']} of {e['out']} (title {e.get('title_id') or '?'}, built {e.get('built', '?')}, "
+                 f"ps5bp {e.get('tool', '?')}, target {e.get('target', '?')})" for rel, e in sorted(seen.items())]
+        raise BuildError("the input game already contains file(s) that ps5bp itself wrote — an earlier backport/overlay "
+                         "was applied to it, so these are not originals:\n" + "\n".join(lines) +
+                         "\nundo it first (ps5bp undo GAME OUT) or use --force to build from them anyway")
+    if seen:
+        rep.warnings.append("--force: input already holds ps5bp output file(s): " + ", ".join(sorted(seen)))
 
     # 2. coverage / fakelibs
     cov: Coverage | None = None
@@ -688,7 +706,6 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     outputs = {rel: (b, raw, b.writes) for rel, (b, raw) in working.items() if b.writes or rel in forced}
 
     # 4. param.json
-    pj_rel = "sce_sys/param.json"
     pj_new: bytes | None = None
     if (game / pj_rel).is_file():
         raw_pj = (game / pj_rel).read_bytes()             # bytes: keep CRLF / BOM exactly
@@ -789,6 +806,9 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             json.loads((out / pj_rel).read_bytes().decode("utf-8-sig"))
         except ValueError as e:
             problems.append(f"{pj_rel}: invalid JSON after edit: {e}")
+    rep.outputs = ledger.hash_files(out, list(outputs) + ([pj_rel] if pj_new is not None else []))
+    ledger.record(rep.outputs, title_id=gs.title_id, out=str(out), built=rep.started, tool=__version__,
+                  target=rep.target_str, warn=lambda m: (log("WARNING: " + m), rep.warnings.append(m)))
     rep.warnings += problems
     rep.ok = not problems
     if trial is not None:

@@ -185,7 +185,7 @@ def cmd_undo(a) -> int:
     from .core.undo import UndoError, apply_undo, plan_undo
     game = Path(a.game)
     try:
-        up = plan_undo(game, [Path(r) for r in a.reports])
+        up = plan_undo(game, [Path(r) for r in a.reports], force=a.force)
     except UndoError as e:
         print(f"undo refused: {e}", file=sys.stderr)
         return 1
@@ -374,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
                          "unchanged files reflinked/copied; inplace: edit the game folder, keep .orig backups")
     bd.add_argument("--no-fakelibs", action="store_true", help="don't select/install fakelibs")
     bd.add_argument("--no-retarget", action="store_true", help="skip known NID retargets (libc patch)")
-    bd.add_argument("--force", action="store_true", help="accept an input whose eboot is already at/below the target SDK")
+    bd.add_argument("--force", action="store_true", help="accept an input whose eboot is already at/below the target SDK, or that already contains ps5bp output files (ledger)")
     bd.add_argument("--strict", action="store_true", help="fail on absent/missing/partial coverage")
     bd.add_argument("--dry-run", action="store_true", help="plan only, write nothing")
     bd.add_argument("--rule", action="append", default=[], metavar="NAME",
@@ -399,6 +399,8 @@ def main(argv: list[str] | None = None) -> int:
     ud.add_argument("game", help="folder the build output was applied to")
     ud.add_argument("reports", nargs="+", help="backport-report.json (or its folder), NEWEST FIRST")
     ud.add_argument("--dry-run", action="store_true")
+    ud.add_argument("--force", action="store_true",
+                    help="undo even if game files don't match the hashes recorded in the report")
     ud.set_defaults(func=cmd_undo)
     kl = sub.add_parser("klog", help="triage a crash log (klog)")
     kl.add_argument("log", help="klog text file, or - for stdin")
