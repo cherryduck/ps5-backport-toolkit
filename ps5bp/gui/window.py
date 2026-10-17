@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, Qt, QUrl, pyqtSlot
+from PyQt6.QtCore import QSettings, QTimer, Qt, QUrl, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QFont
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
                              QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QMainWindow,
@@ -15,7 +15,7 @@ from ..core import sdk
 from ..core.evidence import EvidenceDB, home
 from ..core.pipeline import MODES, BuildOptions
 from ..core.rules import registry
-from .workers import AnalyzeWorker, BuildWorker, FuncWorker, KitWorker
+from .workers import AnalyzeWorker, BuildWorker, ConsoleBridge, FuncWorker, KitWorker
 
 STATUS_COLOR = {"game": "#5a9", "system": "#5a9", "fakelib": "#49c", "partial": "#c93",
                 "unverified": "#888", "absent": "#d55", "missing": "#d55", "stubbed": "#c93", "dump": "#49c"}
@@ -237,6 +237,7 @@ class MainWindow(QMainWindow):
         self.mf_out.setMaximumHeight(150)
         mv.addWidget(self.mf_out)
         self.tabs.addTab(mw, "Memory fix")
+        self._build_console_tab()
         # log
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -737,6 +738,174 @@ class MainWindow(QMainWindow):
         self.say("memfix: " + " / ".join(msgs))
         self._mf_refresh_trials()
 
+    # ---- console ---------------------------------------------------------------------------
+    LOG_LINES = 5000
+
+    def _build_console_tab(self) -> None:
+        self.con_bridge = None
+        self.con_send_worker = None
+        self._con_pending: list[str] = []
+        self.con_timer = QTimer(self)
+        self.con_timer.setInterval(100)
+        self.con_timer.timeout.connect(self._con_flush)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        r = QHBoxLayout()
+        r.addWidget(QLabel("Console IP:"))
+        self.con_ip = QLineEdit(self.settings.value("console/ip", ""))
+        self.con_ip.setPlaceholderText("192.168.x.y")
+        self.con_ip.editingFinished.connect(lambda: self.settings.setValue("console/ip", self.con_ip.text().strip()))
+        r.addWidget(self.con_ip, 1)
+        self.con_start_btn = QPushButton("Start live log")
+        self.con_start_btn.clicked.connect(self._con_start)
+        r.addWidget(self.con_start_btn)
+        self.con_stop_btn = QPushButton("Stop")
+        self.con_stop_btn.setEnabled(False)
+        self.con_stop_btn.clicked.connect(self._con_stop)
+        r.addWidget(self.con_stop_btn)
+        self.con_status = QLabel("idle")
+        r.addWidget(self.con_status)
+        v.addLayout(r)
+        self.con_payloads: dict[str, QLineEdit] = {}
+        for key, label in (("klogsrv", "klogsrv"), ("ftpsrv", "ftpsrv"), ("other", "other payload")):
+            pr = QHBoxLayout()
+            pr.addWidget(QLabel(f"{label}:"))
+            ed = QLineEdit(self.settings.value(f"console/payload_{key}", ""))
+            ed.setPlaceholderText("path to your own .elf (not bundled)")
+            ed.editingFinished.connect(lambda k=key, e=ed: self.settings.setValue(f"console/payload_{k}", e.text().strip()))
+            self.con_payloads[key] = ed
+            pr.addWidget(ed, 1)
+            b = QPushButton("Browse…")
+            b.clicked.connect(lambda _=False, e=ed: self._con_pick(e))
+            pr.addWidget(b)
+            b = QPushButton("Send")
+            b.clicked.connect(lambda _=False, e=ed: self._con_send(e))
+            pr.addWidget(b)
+            v.addLayout(pr)
+        gr = QHBoxLayout()
+        gr.addWidget(QLabel("Game folder (to resolve crash backtraces; optional):"))
+        self.con_game = QLineEdit(self.settings.value("console/game", ""))
+        self.con_game.setPlaceholderText("empty = use the game folder at the top")
+        self.con_game.editingFinished.connect(lambda: self.settings.setValue("console/game", self.con_game.text().strip()))
+        gr.addWidget(self.con_game, 1)
+        v.addLayout(gr)
+        dr = QHBoxLayout()
+        self.con_dump_on = QCheckBox("Capture crash dumps (FTP :2121) into:")
+        self.con_dump_on.setChecked(self.settings.value("console/dumps_on", "false") in (True, "true"))
+        self.con_dump_on.toggled.connect(lambda on: self.settings.setValue("console/dumps_on", on))
+        dr.addWidget(self.con_dump_on)
+        self.con_dump_dir = QLineEdit(self.settings.value("console/dumps_dir", str(home() / "dumps")))
+        self.con_dump_dir.editingFinished.connect(lambda: self.settings.setValue("console/dumps_dir", self.con_dump_dir.text().strip()))
+        dr.addWidget(self.con_dump_dir, 1)
+        b = QPushButton("Browse…")
+        b.clicked.connect(lambda: self._con_pick(self.con_dump_dir, folder=True))
+        dr.addWidget(b)
+        v.addLayout(dr)
+        sp = QSplitter(Qt.Orientation.Vertical)
+        self.con_log = QPlainTextEdit()
+        self.con_log.setReadOnly(True)
+        self.con_log.setFont(QFont("monospace"))
+        self.con_log.setMaximumBlockCount(self.LOG_LINES)
+        sp.addWidget(self.con_log)
+        bot = QSplitter(Qt.Orientation.Horizontal)
+        self.con_triage = QPlainTextEdit()
+        self.con_triage.setReadOnly(True)
+        self.con_triage.setFont(QFont("monospace"))
+        self.con_triage.setPlaceholderText("latest crash diagnosis appears here")
+        bot.addWidget(self.con_triage)
+        self.con_dumps = QListWidget()
+        bot.addWidget(self.con_dumps)
+        sp.addWidget(bot)
+        sp.setSizes([350, 250])
+        v.addWidget(sp, 1)
+        self.last_console_crash = ""
+        self.tabs.addTab(w, "Console")
+
+    def _con_pick(self, edit: QLineEdit, folder: bool = False) -> None:
+        if folder:
+            f = QFileDialog.getExistingDirectory(self, "Folder", edit.text())
+        else:
+            f, _ = QFileDialog.getOpenFileName(self, "Payload (.elf)", edit.text(), "ELF (*.elf);;All files (*)")
+        if f:
+            edit.setText(f)
+            edit.editingFinished.emit()
+
+    def _con_host(self) -> str | None:
+        ip = self.con_ip.text().strip()
+        if not ip:
+            self.say("console: enter the console IP first")
+            return None
+        self.settings.setValue("console/ip", ip)
+        return ip
+
+    def _con_send(self, edit: QLineEdit) -> None:
+        from ..core import console
+        ip, path = self._con_host(), edit.text().strip()
+        if not ip:
+            return
+        if not Path(path).is_file():
+            self.say(f"console: payload not found: {path}")
+            return
+        self.con_status.setText(f"sending {Path(path).name}…")
+        wk = FuncWorker(console.send_payload, ip, path)
+        self.con_send_worker = wk
+        wk.done.connect(lambda n, p=path: (self.con_status.setText("sent"), self.say(f"console: sent {n} bytes of {Path(p).name} to {ip}")))
+        wk.error.connect(lambda m: (self.con_status.setText("send failed"), self.say(f"console: send failed: {m.splitlines()[0]}")))
+        wk.start()
+
+    def _con_start(self) -> None:
+        ip = self._con_host()
+        if not ip or self.con_bridge is not None:
+            return
+        game = self.con_game.text().strip() or (self.game_edit.text().strip() if (Path(self.game_edit.text().strip()) / "eboot.bin").is_file() else "")
+        flags = self.plan.scan.flags if self.plan else []
+        dumps = Path(self.con_dump_dir.text().strip()).expanduser() if self.con_dump_on.isChecked() else None
+        crash_dir = dumps if dumps else home() / "console"
+        b = ConsoleBridge(ip, 3232, 2121, game, flags, crash_dir, dumps)
+        b.line.connect(self._con_line)
+        b.status.connect(self.con_status.setText)
+        b.crash.connect(self._con_crash)
+        b.dump_event.connect(lambda m: self.con_status.setText(m))
+        b.captured.connect(self._con_captured)
+        self.con_bridge = b
+        self.con_timer.start()
+        self.con_start_btn.setEnabled(False)
+        self.con_stop_btn.setEnabled(True)
+        b.start()
+
+    def _con_stop(self) -> None:
+        b, self.con_bridge = self.con_bridge, None
+        if b is not None:
+            for sig in (b.line, b.status, b.crash, b.dump_event, b.captured):
+                try:
+                    sig.disconnect()
+                except TypeError:
+                    pass
+            b.stop()
+        self.con_timer.stop()
+        self._con_flush()
+        self.con_start_btn.setEnabled(True)
+        self.con_stop_btn.setEnabled(False)
+        self.con_status.setText("stopped")
+
+    def _con_line(self, ln: str) -> None:
+        self._con_pending.append(ln)
+
+    def _con_flush(self) -> None:
+        if self._con_pending:
+            chunk, self._con_pending = self._con_pending[-self.LOG_LINES:], []
+            self.con_log.appendPlainText("\n".join(chunk))
+
+    def _con_crash(self, text: str, saved: str, block: str) -> None:
+        self.con_triage.setPlainText(text + (f"\ncrash block saved to {saved}\n" if saved else ""))
+        self.last_console_crash = block
+        self.klog_in.setPlainText(block)           # ready for the Crash log / Memory fix tabs
+        self.say("console: crash detected" + (f" — saved {saved}" if saved else ""))
+
+    def _con_captured(self, cap) -> None:
+        state = "complete" if cap.complete else ("vanished" if cap.vanished else "partial")
+        self.con_dumps.addItem(f"{cap.folder}  [{state}]  {len(cap.files)} file(s)  {cap.out_dir}")
+
     # ---- crash log -------------------------------------------------------------------------
     def _load_klog(self) -> None:
         f, _ = QFileDialog.getOpenFileName(self, "Crash log", "", "Logs (*.txt *.log);;All files (*)")
@@ -822,6 +991,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Kit", msg)
 
     def closeEvent(self, e) -> None:                             # noqa: N802
+        self._con_stop()
         for w in (self.worker, self.kit_worker):
             if w is not None and w.isRunning():
                 if isinstance(w, BuildWorker):

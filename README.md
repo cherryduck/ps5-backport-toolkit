@@ -222,6 +222,34 @@ usual noise (fake-signed mount, missing save, offline PSN errors, kstuff), and w
 lands on the startup allocator calling `sceKernelAllocateDirectMemory` before `exit()`
 and suggests `pssr-memory` / `pro-disable`.
 
+## Console (live log, crash dumps)
+
+Talks to a console that runs your own payloads (elfldr / klogsrv / ftpsrv; none are
+bundled, `*.elf` is gitignored). Pure standard library networking; the GUI has a
+**Console** tab with the same features (IP is remembered).
+
+```
+ps5bp console send 192.168.1.50 klogsrv.elf              # raw ELF to the loader, TCP 9021 (--port)
+ps5bp console klog 192.168.1.50 --out log.txt --game GAME --dumps dumps/
+ps5bp console dumps 192.168.1.50 --out dumps/            # crash dumps only (FTP 2121)
+ps5bp memfix GAME --result 1 crash --from-console dumps/ # newest crash-*.txt in the folder (or a file)
+```
+
+- `klog` streams klogsrv (TCP 3232) to stdout and `--out`, reconnecting when the console
+  drops. When a fatal-signal block for an `/app0/` process completes, it runs the normal
+  klog triage (symbolized with `--game`), prints the diagnosis and saves the block as
+  `crash-<time>.txt` beside `--out` (or in `--dumps`/the current folder). Ctrl-C stops.
+- Crash dumps: the console writes `/user/devlog/system/sce_coredumps.0/<TITLEID>_<n>/`
+  (`report.log` first, the `.prosperodmp` later) and deletes it when the crash screen
+  closes, so the watcher polls ftpsrv (LIST only, passive mode) and copies every **new**
+  folder immediately (folders that existed at start are ignored; downloads go to
+  `.partial` then rename; it waits up to 120 s for the core, and keeps what it has if the
+  folder vanishes). The klog line `[CRS][coredump_seq] prepare() ... path=...` wakes it at once.
+  Start the watcher *before* launching the game.
+- `memfix --from-console` is `--klog` taking the file the console command saved.
+- The GUI tab remembers the IP, payload paths and dump folder (QSettings); the CLI takes
+  them as arguments. Extra option: `klog --exit-after-crash`.
+
 ## Tests
 
 ```

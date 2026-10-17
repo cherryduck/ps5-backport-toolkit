@@ -5,7 +5,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from ..core.evidence import EvidenceDB
 from ..core.pipeline import BuildCancelled, BuildError, BuildOptions, build, plan
@@ -108,3 +108,54 @@ class FuncWorker(QThread):
             self.done.emit(self.fn(*self.args))
         except Exception as e:                                   # noqa: BLE001
             self.error.emit(f"{e}\n\n{traceback.format_exc()}")
+
+
+class ConsoleBridge(QObject):
+    """Runs the klog stream (+ optional crash-dump watcher) on their own threads and relays
+    everything to the GUI thread as signals. Crash triage (which may disassemble) also runs
+    off the GUI thread."""
+    line = pyqtSignal(str)
+    status = pyqtSignal(str)
+    crash = pyqtSignal(str, str, str)        # triage text, saved crash file, raw block
+    dump_event = pyqtSignal(str)
+    captured = pyqtSignal(object)            # console.Captured
+
+    def __init__(self, host: str, klog_port: int, ftp_port: int, game: str, flags: list[str],
+                 crash_dir: Path, dumps_dir: Path | None):
+        super().__init__()
+        from ..core import console
+        self._c = console
+        self.game, self.flags, self.crash_dir = game, flags, crash_dir
+        self.detector = console.CrashDetector()
+        self.watcher = None
+        if dumps_dir is not None:
+            self.watcher = console.CoreDumpWatcher(host, dumps_dir, port=ftp_port,
+                                                   on_event=self.dump_event.emit,
+                                                   on_captured=self.captured.emit)
+        self.stream = console.KlogStream(host, klog_port, on_line=self._on_line, on_status=self.status.emit)
+
+    def _on_line(self, ln: str) -> None:
+        self.line.emit(ln)
+        if self.watcher and self._c.DUMP_ANNOUNCE.search(ln):
+            self.watcher.wake()
+        block = self.detector.feed(ln)
+        if block:
+            try:
+                text = self._c.triage_text(block, self.game or None, self.flags)
+                saved = self._c.save_crash(block, self.crash_dir)
+            except Exception as e:                               # noqa: BLE001
+                text, saved = f"triage failed: {e}", ""
+            self.crash.emit(text, str(saved), block)
+
+    def start(self) -> None:
+        if self.watcher:
+            self.watcher.start()
+        self.stream.start()
+
+    def stop(self) -> None:
+        self.stream.stop()
+        if self.watcher:
+            self.watcher.stop()
+        for t in (self.stream, self.watcher):
+            if t is not None and t.is_alive():
+                t.join(3)
