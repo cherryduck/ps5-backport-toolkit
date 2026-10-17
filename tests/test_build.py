@@ -279,3 +279,152 @@ def test_rule_recommendation_keys_on_declared_sdk():
     # a console at 11.xx does not change it: only the declared SDK does
     from ps5bp.core.rules import RuleContext
     assert RuleContext.declared_sdk.fget(SimpleNamespace(target=4)) == 4
+
+
+# ---- Phase 10e: apply safety --------------------------------------------------------------
+def _overlay_over(out, game):
+    import shutil
+    shutil.copytree(out, game, dirs_exist_ok=True, ignore=shutil.ignore_patterns("backport-report.*"))
+
+
+def test_ledger_records_outputs_and_dry_run_does_not(game, db, tmp_path):
+    from ps5bp.core import ledger
+    build(game, BuildOptions(target=4, out=tmp_path / "d", dry_run=True), db, log=lambda m: None)
+    assert not ledger.ledger_path().exists()
+    out = tmp_path / "out"
+    rep = build(game, BuildOptions(target=4, out=out, also_targets=[(5, 0)]), db, log=lambda m: None)
+    ents = json.loads(ledger.ledger_path().read_text())["entries"]
+    assert {e["path"] for e in ents if e["out"] == str(out)} == set(rep.outputs) and rep.outputs
+    assert any(e["out"] == str(tmp_path / "out-fw5") for e in ents)
+    e = ents[0]
+    assert {"sha256", "path", "title_id", "out", "built", "tool", "target"} <= set(e) and e["title_id"] == "PPSA99999"
+    assert set(rep.inputs) >= {"eboot.bin", "sce_sys/param.json", "sce_module/libc.prx"}
+    assert json.loads((out / "backport-report.json").read_text())["inputs"] == rep.inputs
+
+
+def test_rebuild_over_applied_overlay_refused(game, db, tmp_path):
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    _overlay_over(out, game)
+    with pytest.raises(BuildError, match="already"):          # SDK check and/or ledger: either refuses
+        build(game, BuildOptions(target=4, out=tmp_path / "o2"), db, log=lambda m: None)
+    assert not (tmp_path / "o2").exists()
+    build(game, BuildOptions(target=4, out=tmp_path / "o2", force=True), db, log=lambda m: None)
+
+
+def test_fakelib_only_overlay_caught_without_sdk_check(game, db, tmp_path):
+    # an overlay that only changed fakelib/libc: the eboot SDK check can't see it, the ledger does
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    (game / "fakelib").mkdir(exist_ok=True)
+    import shutil
+    shutil.copy2(out / "fakelib/libSceFoo.sprx", game / "fakelib/libSceFoo.sprx")
+    with pytest.raises(BuildError, match="ps5bp itself wrote") as ei:
+        build(game, BuildOptions(target=4, out=tmp_path / "o2"), db, log=lambda m: None)
+    assert "fakelib/libSceFoo.sprx" in str(ei.value) and str(out) in str(ei.value)
+    build(game, BuildOptions(target=4, out=tmp_path / "o2", force=True), db, log=lambda m: None)
+
+
+def test_corrupt_ledger_is_kept_and_restarted(game, db, tmp_path):
+    from ps5bp.core import ledger
+    lp = ledger.ledger_path()
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    lp.write_text("{not json")
+    msgs = []
+    rep = build(game, BuildOptions(target=4, out=tmp_path / "out"), db, log=msgs.append)
+    assert (lp.parent / "applied.json.bak").read_text() == "{not json"
+    assert any("corrupt" in m for m in rep.warnings)
+    assert len(json.loads(lp.read_text())["entries"]) == len(rep.outputs)
+    lp.write_text(json.dumps({"entries": "nope"}))
+    assert ledger.load(lambda m: msgs.append(m)) == [] and any("corrupt" in m for m in msgs)
+    assert not list(lp.parent.glob("applied.json.*.tmp"))
+
+
+def test_undo_verifies_clean_flow_and_modified_file(game, db, tmp_path):
+    from ps5bp.core.undo import UndoError, apply_undo, plan_undo
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    before = _tree(game)
+    _overlay_over(out, game)
+    # game file modified after the overlay -> refused, then forced
+    eb = game / "eboot.bin"
+    raw = bytearray(eb.read_bytes())
+    raw[-1] ^= 0xFF
+    eb.write_bytes(raw)
+    with pytest.raises(UndoError, match="eboot.bin"):
+        plan_undo(game, [out])
+    assert any("--force" in n for n in plan_undo(game, [out], force=True).notes)
+    raw[-1] ^= 0xFF
+    eb.write_bytes(raw)
+    up = plan_undo(game, [out])
+    assert not any("skipped" in n for n in up.notes)
+    apply_undo(game, up)
+    assert {k: v for k, v in _tree(game).items() if k in before} == before
+
+
+def test_undo_reversal_path_verifies_and_post_check(game, db, tmp_path):
+    import shutil
+    from ps5bp.core.undo import UndoError, plan_undo
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    shutil.rmtree(tmp_path / "out.originals")
+    rp = out / "backport-report.json"
+    _overlay_over(out, game)
+    plan_undo(game, [out])                                  # clean: passes
+    rep = json.loads(rp.read_text())
+    rep["inputs"]["eboot.bin"] = "0" * 64                   # wrong input hash: post-restore check fails
+    rp.write_text(json.dumps(rep))
+    with pytest.raises(UndoError, match="recorded inputs"):
+        plan_undo(game, [out])
+    plan_undo(game, [out], force=True)
+
+
+def test_undo_old_report_without_inputs(game, db, tmp_path):
+    from ps5bp.core.undo import apply_undo, plan_undo
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    before = _tree(game)
+    _overlay_over(out, game)
+    rp = out / "backport-report.json"
+    rep = json.loads(rp.read_text())
+    rep.pop("inputs"), rep.pop("outputs")
+    rp.write_text(json.dumps(rep))
+    up = plan_undo(game, [out])
+    assert any("verification skipped" in n for n in up.notes)
+    apply_undo(game, up)
+    assert {k: v for k, v in _tree(game).items() if k in before} == before
+
+
+def test_case_insensitive_member_lookup(tmp_path):
+    from ps5bp.core.ledger import AmbiguousMember, resolve_member
+    (tmp_path / "Sce_Module").mkdir()
+    (tmp_path / "Sce_Module/LIBC.PRX").write_bytes(b"x")
+    assert resolve_member(tmp_path, "sce_module/libc.prx") == "Sce_Module/LIBC.PRX"
+    assert resolve_member(tmp_path, "sce_module/new.prx") == "Sce_Module/new.prx"
+    assert resolve_member(tmp_path, "nothere/a/b") == "nothere/a/b"
+    (tmp_path / "Sce_Module/libc.prx").write_bytes(b"y")
+    assert resolve_member(tmp_path, "Sce_Module/libc.prx") == "Sce_Module/libc.prx"      # exact wins
+    with pytest.raises(AmbiguousMember):
+        resolve_member(tmp_path, "sce_module/LibC.prx")
+
+
+def test_undo_case_insensitive_game(game, db, tmp_path):
+    from ps5bp.core.undo import UndoError, apply_undo, plan_undo
+    out = tmp_path / "out"
+    build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
+    before = {k.lower(): v for k, v in _tree(game).items()}
+    _overlay_over(out, game)
+    (game / "sce_module").rename(game / "SCE_MODULE")
+    (game / "eboot.bin").rename(game / "EBOOT.BIN")
+    apply_undo(game, plan_undo(game, [out]))
+    after = {k.lower(): v for k, v in _tree(game).items()}
+    assert {k: v for k, v in after.items() if k in before} == before
+    assert not (game / "eboot.bin").exists() or (game / "EBOOT.BIN").exists()
+    # ambiguity -> refused
+    import shutil
+    shutil.rmtree(game / "sce_module", ignore_errors=True)
+    (game / "SCE_MODULE/LIBC.PRX").write_bytes(b"z")
+    (game / "SCE_MODULE/Libc.prx").write_bytes(b"z")
+    (game / "SCE_MODULE/libc.prx").unlink(missing_ok=True)
+    with pytest.raises(UndoError, match="differ only in case"):
+        plan_undo(game, [out])
