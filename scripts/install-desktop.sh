@@ -23,7 +23,7 @@ command -v rsvg-convert >/dev/null && rsvg-convert -w 256 -h 256 ps5bp/data/ps5b
 cat > "$APPS/ps5bp.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=PS5 Backporter
+Name=PS5 Backport Linux
 GenericName=PS5 game backport tool
 Comment=Analyze PS5 game dumps and build firmware backports
 Exec="$EXE"
