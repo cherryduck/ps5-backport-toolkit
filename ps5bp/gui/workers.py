@@ -68,7 +68,7 @@ class BuildWorker(QThread):
 
 
 class KitWorker(QThread):
-    """add (src, fw, name, source) or remove (name) a kit."""
+    """add (src, fw, name, source, tested_fw), remove (name) or reindex (names) kits."""
     done = pyqtSignal(str)
     error = pyqtSignal(str)
 
@@ -84,6 +84,10 @@ class KitWorker(QThread):
                 r = db.add_kit(self.kw["src"], self.kw["fw"], self.kw.get("name") or None,
                                self.kw.get("source", ""), tested_fw=self.kw.get("tested_fw"))
                 self.done.emit(f"kit added: {r}")
+            elif self.action == "reindex":
+                res = db.reindex(self.kw.get("names") or None)
+                self.done.emit("libc reindex:\n" + "\n".join(f"{n:32} {m}" for n, m in res.items())
+                               if res else "libc reindex: no kits")
             else:
                 ok = db.remove_kit(self.kw["name"])
                 self.done.emit(f"kit {self.kw['name']} {'removed' if ok else 'not found'}")

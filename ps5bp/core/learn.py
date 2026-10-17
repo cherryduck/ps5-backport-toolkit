@@ -246,3 +246,52 @@ def _psml_overlay(original: Path, root: Path) -> list[FileReport]:
     if out and not ((original / "k9.psp").is_file() and (original / "k9.psp").read_bytes() == k9.read_bytes()):
         out.append(FileReport("k9.psp", classes={"psml-overlay": k9.stat().st_size}))
     return out
+
+
+def learn_report(original: Path, kit: Path, recipe: bool = False, out: Path = Path(".")) -> list[str]:
+    """The text `ps5bp kit learn` prints (shared with the GUI); with `recipe`, also writes the
+    unexplained edits as per-game recipe JSON files into `out`."""
+    import json as _json
+    tid = ""
+    pj = original / "sce_sys/param.json"
+    if pj.is_file():
+        from .paramjson import ParamJson
+        try:
+            tid = ParamJson.load(pj).title_id
+        except ValueError:
+            pass
+    L: list[str] = []
+    reps, recipes = learn(original, kit, tid)
+    totals: dict[str, int] = {}
+    for r in reps:
+        for k, v in r.classes.items():
+            totals[k] = totals.get(k, 0) + v
+        if r.problem:
+            L.append(f"{r.file}: {r.problem}")
+        for e in r.edits:
+            L.append(f"{r.file}: {e['va']}  {e['old']} -> {e['new']}   {e['note']}")
+    L.append("\nchanged bytes by kind: " + ", ".join(f"{k} {v}" for k, v in sorted(totals.items())))
+    L.append("  sdk / imports: done by every build;  plt-stub: --rule kit-stubs (after `kit add`);  "
+             "mapflex: --rule mapflex-flags;  savedata: --rule savedata-mount;  wwise: --rule wwise-71")
+    named = sorted(k for k in totals if k not in ("sdk", "plt-stub", "imports", "mapflex", "savedata", "wwise",
+                                                  "game"))
+    if named:
+        L.append("  also explained by their rules (--rule NAME): " + ", ".join(f"{k} ({totals[k]} B)" for k in named))
+    if totals.get("game"):
+        L.append("  game: edits no generic rule explains (listed above) — each is a candidate for a new "
+                 "rule; --recipe writes them as a recipe for this game only")
+    hdr = sorted({h for r in reps for h in r.header_only})
+    if hdr:
+        L.append(f"  not reproduced: ELF header edits ({', '.join(hdr)[:120]}) — re-signing artefacts")
+    if not recipe:
+        if not recipes:
+            L.append("nothing left unexplained: every change is reproduced by generic handling")
+        return L
+    out.mkdir(parents=True, exist_ok=True)
+    for rec in recipes:
+        f = out / f"{rec['name']}.json"
+        f.write_text(_json.dumps(rec, indent=1))
+        L.append(f"wrote {f}  ({len(rec['ops'])} edit(s)) — apply with: ps5bp build ... --patch {f}")
+    if not recipes:
+        L.append("no game-specific edits to learn")
+    return L

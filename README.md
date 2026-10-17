@@ -36,6 +36,14 @@ ps5bp klog crash.txt --game /games/PPSA12345-fw4
 
 Or `ps5bp-gui`: game folder → **Analyze** → tick rules → **Build backport**; the
 Crash log tab does the klog triage.
+The GUI covers the phase-10 features too: *Fix rules* has the compat-stubs **Seeds** field
+(NIDs checked against the contract table; manual-only ones in the tooltip) and **PLT
+fallback**; two pickers next to the output row replace the dump's libSceAmpr / libScePlayGo
+(keep / auto best kit / a named kit; also used by Analyze); **Undo applied backport…**
+previews, confirms and runs `undo` (with a red-warned *Force*); the *Kits* tab has
+**Learn from kit…** (optional recipe output), **Reindex libc**, PSML-overlay and libc columns,
+and a tested-FW question when adding; the build-done dialog lists siblings, the libc
+cross-check and the console-FW warning.
 
 ## Kits and import coverage
 
