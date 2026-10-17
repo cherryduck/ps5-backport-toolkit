@@ -641,7 +641,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                 except Exception as e:                       # noqa: BLE001
                     raise BuildError(f"rule {f.rule} failed on {f.file}: {e}") from None
                 applied = True
-            else:
+            elif f.data.get("status") != "DONE":          # an already-patched site is not a problem
                 rep.warnings.append(f"rule {f.rule}: {f.title} not applicable: {f.reason}")
         elif f.recommended and f.applicable:
             rep.warnings.append(f"recommended: --rule {f.rule}  ({f.title}{'; ' + f.reason if f.reason else ''})")
