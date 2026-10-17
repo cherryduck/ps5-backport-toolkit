@@ -123,6 +123,7 @@ class ConsoleBridge(QObject):
     crash = pyqtSignal(str, str, str)        # triage text, saved crash file, raw block
     dump_event = pyqtSignal(str)
     captured = pyqtSignal(object)            # console.Captured
+    loop = pyqtSignal(str, str)              # loop diagnosis text, saved loop file
 
     def __init__(self, host: str, klog_port: int, ftp_port: int, game: str, flags: list[str],
                  crash_dir: Path, dumps_dir: Path | None):
@@ -131,6 +132,7 @@ class ConsoleBridge(QObject):
         self._c = console
         self.game, self.flags, self.crash_dir = game, flags, crash_dir
         self.detector = console.CrashDetector()
+        self.loops = console.LoopDetector()
         self.watcher = None
         if dumps_dir is not None:
             self.watcher = console.CoreDumpWatcher(host, dumps_dir, port=ftp_port,
@@ -142,6 +144,14 @@ class ConsoleBridge(QObject):
         self.line.emit(ln)
         if self.watcher and self._c.DUMP_ANNOUNCE.search(ln):
             self.watcher.wake()
+        ev = self.loops.feed(ln)
+        if ev:
+            try:
+                text = self._c.loop_text(ev, self.game or None, self.flags)
+                saved = self._c.save_loop(text, self.crash_dir)
+            except Exception as e:                               # noqa: BLE001
+                text, saved = f"loop diagnosis failed: {e}", ""
+            self.loop.emit(text, str(saved))
         block = self.detector.feed(ln)
         if block:
             try:

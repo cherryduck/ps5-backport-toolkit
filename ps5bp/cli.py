@@ -226,7 +226,7 @@ def cmd_klog(a) -> int:
         flags = scan_game(Path(a.game)).flags
     klog.diagnose(t, flags)
     print(t.to_text(), end="")
-    return 0 if t.crashes else 3
+    return 0 if (t.crashes or t.issues) else 3
 
 
 def cmd_console(a) -> int:
@@ -271,6 +271,7 @@ def cmd_console(a) -> int:
     if a.game:
         flags = scan_game(Path(a.game)).flags
     det = console.CrashDetector()
+    loopdet = console.LoopDetector()
     crashes = []
 
     def on_line(ln: str) -> None:
@@ -288,6 +289,11 @@ def cmd_console(a) -> int:
             crashes.append(saved)
             if a.exit_after_crash:
                 stop.set()
+        ev = loopdet.feed(ln)
+        if ev:
+            body = console.loop_text(ev, a.game, flags)
+            saved = console.save_loop(body, crash_dir)
+            say("\n==== game looks stuck in a loop ====\n" + body + f"loop saved to {saved}\n========================")
 
     ks = console.KlogStream(a.host, a.port, on_line=on_line, on_status=lambda m: say(f"[klog] {m}"))
     ks.start()

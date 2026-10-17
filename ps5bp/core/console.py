@@ -179,6 +179,114 @@ class CrashDetector:
         return text
 
 
+# ---- loop / hang detector --------------------------------------------------------------------
+_PFX = re.compile(r"^\s*<\d+>\s*")
+_ERRISH = re.compile(r"\b(error|errors|fail|failed|failure|unresolved|not found|invalid|cannot|can't|abort|"
+                     r"assert\w*|exception|fatal|timeout|timed out|rejected)\b|\b0x8[0-9a-f]{7}\b", re.I)
+
+
+def normalise(line: str) -> str:
+    """A line with the <NNN> priority prefix, numbers and number lists replaced, so the same message
+    compares equal from one pass to the next (timestamps, counters, rotating id histories)."""
+    s = _PFX.sub("", line).strip()
+    s = re.sub(r"\d+", "#", s)
+    return re.sub(r"#(?:\s*,\s*#)+", "#", s)
+
+
+def looks_stuck(lines: list[str]) -> bool:
+    """A repeating group of lines only counts as a hang when the klog itself explains something in it
+    (a libSceSaveData failure, an Ampr index problem) or it contains a warning/error-looking line.
+    A periodic benign line (heartbeat, stats) never triggers."""
+    from . import klog
+    text = "\n".join(lines)
+    t = klog.parse(text)
+    return bool(t.issues or t.ampr_findings or _ERRISH.search(text))
+
+
+@dataclass
+class LoopEvent:
+    window: list[str]          # one pass through the loop (raw lines)
+    repeats: int               # passes seen when it was reported
+    recent: list[str]          # the repeated passes (raw lines)
+
+    def text(self) -> str:
+        return "\n".join(self.recent) + "\n"
+
+
+class LoopDetector:
+    """feed(line) -> LoopEvent when the stream is cycling: the last K (1..max_window) normalised lines
+    repeat `min_repeats` times in a row (6 for K=1: one line alone must repeat more) and the loop is
+    not benign (looks_stuck). Reported once per loop; re-armed after `rearm` consecutive lines that do
+    not belong to the loop (the stream moved on). Keeps the last `buffer` raw lines for Diagnose-now."""
+
+    def __init__(self, min_repeats: int = 3, max_window: int = 30, buffer: int = 2000, rearm: int = 5):
+        self.min_repeats, self.max_window, self.rearm = min_repeats, max_window, rearm
+        self.raw: deque[str] = deque(maxlen=buffer)
+        self._norm: deque[str] = deque(maxlen=max(buffer, 6 * max_window + 8))
+        self._active: frozenset | None = None
+        self._miss = 0
+
+    def recent(self) -> list[str]:
+        return list(self.raw)
+
+    def feed(self, line: str) -> LoopEvent | None:
+        n = normalise(line)
+        self.raw.append(line)
+        self._norm.append(n)
+        if self._active is not None:
+            self._miss = 0 if n in self._active else self._miss + 1
+            if self._miss < self.rearm:
+                return None
+            self._active, self._miss = None, 0
+        if not n:
+            return None
+        seq = self._norm
+        L = len(seq)
+        for k in range(1, self.max_window + 1):
+            reps = 6 if k == 1 else self.min_repeats
+            if L < reps * k or seq[-1] != seq[-1 - k]:
+                continue
+            tail = [seq[i] for i in range(L - reps * k, L)]
+            w = tail[-k:]
+            if tail != w * reps:
+                continue
+            if k > 1 and any(w[i:] + w[:i] == w for i in range(1, k) if k % i == 0):
+                continue                                   # a shorter period exists: found at a smaller k
+            raw = list(self.raw)[-reps * k:]
+            if not looks_stuck(raw):
+                continue
+            self._active, self._miss = frozenset(w), 0
+            return LoopEvent(raw[-k:], reps, raw)
+        return None
+
+
+def loop_text(ev: LoopEvent, game: str | Path | None = None, flags: list[str] | None = None) -> str:
+    head = (f"game looks stuck in a loop: {len(ev.window)} line(s) repeated {ev.repeats}x and counting\n"
+            "one pass:\n" + "".join(f"   {x}\n" for x in ev.window) + "\n")
+    return head + triage_text(ev.text(), game, flags)
+
+
+def diagnose_recent(lines: list[str], game: str | Path | None = None, flags: list[str] | None = None) -> str:
+    """The `Diagnose now` button: explain the buffered recent log (crash triage if a crash block is in it,
+    log-line problems otherwise)."""
+    if not lines:
+        return "nothing to diagnose yet: no console log lines received\n"
+    return f"diagnosis of the last {len(lines)} log line(s)\n\n" + triage_text("\n".join(lines) + "\n", game, flags)
+
+
+def save_loop(text: str, out_dir: str | Path) -> Path:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    base = time.strftime("loop-%Y%m%d-%H%M%S")
+    p = out / f"{base}.txt"
+    n = 1
+    while p.exists():
+        p = out / f"{base}-{n}.txt"
+        n += 1
+    p.write_text(text)
+    return p
+
+
 def triage_text(block: str, game: str | Path | None = None, flags: list[str] | None = None) -> str:
     """Parse + (optionally symbolize) + diagnose a crash block with the existing klog code."""
     from . import klog

@@ -1,6 +1,7 @@
 """Main window: game -> analyze -> choose rules -> build."""
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import QSettings, QTimer, Qt, QUrl, pyqtSlot
@@ -865,6 +866,8 @@ class MainWindow(QMainWindow):
         self.con_bridge = None
         self.con_send_worker = None
         self._con_pending: list[str] = []
+        self._con_recent: deque[str] = deque(maxlen=2000)
+        self.con_diag_worker = None
         self.con_timer = QTimer(self)
         self.con_timer.setInterval(100)
         self.con_timer.timeout.connect(self._con_flush)
@@ -938,8 +941,18 @@ class MainWindow(QMainWindow):
         self.con_triage = QPlainTextEdit()
         self.con_triage.setReadOnly(True)
         self.con_triage.setFont(QFont("monospace"))
-        self.con_triage.setPlaceholderText("latest crash diagnosis appears here")
-        bot.addWidget(self.con_triage)
+        self.con_triage.setPlaceholderText("latest crash / hang diagnosis appears here")
+        tv = QWidget()
+        tl = QVBoxLayout(tv)
+        tl.setContentsMargins(0, 0, 0, 0)
+        self.con_diag_btn = QPushButton("Diagnose now")
+        self.con_diag_btn.setToolTip("Explain the recent console log (last 2000 lines) right now: crash triage if a "
+                                     "crash is in it, otherwise the problems the log lines show (e.g. a save data "
+                                     "mount failing in a loop on a black screen).")
+        self.con_diag_btn.clicked.connect(self._con_diagnose)
+        tl.addWidget(self.con_diag_btn)
+        tl.addWidget(self.con_triage)
+        bot.addWidget(tv)
         self.con_dumps = QListWidget()
         bot.addWidget(self.con_dumps)
         sp.addWidget(bot)
@@ -994,6 +1007,7 @@ class MainWindow(QMainWindow):
         b.line.connect(self._con_line)
         b.status.connect(self.con_status.setText)
         b.crash.connect(self._con_crash)
+        b.loop.connect(self._con_loop)
         b.dump_event.connect(lambda m: self.con_status.setText(m))
         b.captured.connect(self._con_captured)
         self.con_bridge = b
@@ -1005,7 +1019,7 @@ class MainWindow(QMainWindow):
     def _con_stop(self) -> None:
         b, self.con_bridge = self.con_bridge, None
         if b is not None:
-            for sig in (b.line, b.status, b.crash, b.dump_event, b.captured):
+            for sig in (b.line, b.status, b.crash, b.loop, b.dump_event, b.captured):
                 try:
                     sig.disconnect()
                 except TypeError:
@@ -1019,6 +1033,33 @@ class MainWindow(QMainWindow):
 
     def _con_line(self, ln: str) -> None:
         self._con_pending.append(ln)
+        self._con_recent.append(ln)
+
+    def _con_loop(self, text: str, saved: str) -> None:
+        self.con_triage.setPlainText(text + (f"\nloop saved to {saved}\n" if saved else ""))
+        self.say("console: game looks stuck in a loop" + (f" — saved {saved}" if saved else ""))
+
+    def _con_diagnose(self) -> None:
+        from ..core import console
+        from ..core.klog import has_game
+        top = self.game_edit.text().strip()
+        game = self.con_game.text().strip() or (top if top and has_game(Path(top).expanduser()) else "")
+        flags = self.plan.scan.flags if self.plan else []
+        lines = list(self._con_recent)
+        self.con_diag_btn.setEnabled(False)
+        wk = FuncWorker(console.diagnose_recent, lines, game or None, flags)
+        self.con_diag_worker = wk
+
+        def done(text):
+            self.con_triage.setPlainText(text)
+            self.con_diag_btn.setEnabled(True)
+
+        def err(m):
+            self.con_triage.setPlainText(f"diagnosis failed: {m.splitlines()[0]}")
+            self.con_diag_btn.setEnabled(True)
+        wk.done.connect(done)
+        wk.error.connect(err)
+        wk.start()
 
     def _con_flush(self) -> None:
         if self._con_pending:

@@ -209,7 +209,7 @@ All rules, in plain words:
 | `wwise-71` | Wwise audio asks for 7.1.4 (12 speakers); old firmware only does 7.1 → no sound. | 4.xx (console-tested) |
 | `frostbite-8ch` | Same problem in EA/Frostbite games (12 → 8 channels). | 4.xx |
 | `set3-nonfatal` | On firmware 6–9 an audio latency call fails and the game gives up on sound; makes the failure harmless. | never automatically (untested on 6–9) |
-| `savedata-mount` | Save-game mount request uses a value 4.xx rejects (error CE-107098-5). | when kits show it (console-tested) |
+| `savedata-mount` | Save-game mount request uses a value 4.xx rejects (error CE-107098-5). Read-only mounts are left alone. | when kits show it (console-tested) |
 | `savedata-prepare` | Save "prepare" request uses a mode 4.xx doesn't know. | never automatically |
 | `savedata-dirsearch` | Game uses a save-search function added in 5.02; switches it to the older one. | never automatically |
 | `gamepresets-28` | Game-presets request is 8 bytes bigger than 4.xx accepts. | 4.xx |
@@ -259,6 +259,15 @@ You can also send a payload from here: `ps5bp console send IP file.elf` (loader 
 the Send buttons in the Console tab.
 
 **Or from a saved log file:** app **Crash log** tab, or `ps5bp klog crash.txt --game /games/PPSA12345`.
+
+**Black screen, no crash?** A game that hangs doesn't produce a crash block, but its log often repeats the
+same few lines forever (for example a save data mount failing again and again). The **Console** tab
+(and `ps5bp console klog`) watches for that: when a group of lines repeats and it contains an error or a
+problem ps5bp recognises, it says *game looks stuck in a loop*, explains it, and saves `loop-<time>.txt`.
+Harmless repeating lines (a periodic heartbeat) are ignored. **Diagnose now** in the Console tab explains the
+last 2000 received lines at any moment. `ps5bp klog LOG` explains log lines even when there is no crash:
+for example `Failed to mount ...(0x809f8032)` with the mount's read-only / `systemBlocks` parameters, with
+repeats counted.
 
 ### 2. Read the diagnosis
 
@@ -358,9 +367,9 @@ else changed them since, it stops. *Force* / `--force` overrides that check.
 | `ps5bp build GAME --target N --out OUT [options]` | Make the backport. Main options below. |
 | `ps5bp rules` | List all fix rules and built-in recipes. |
 | `ps5bp undo GAME OUT [OLDER_OUT ...] [--dry-run] [--force]` | Restore a game folder an overlay was copied over. |
-| `ps5bp klog LOG [--game GAME]` | Explain a crash log (`-` reads from stdin). |
+| `ps5bp klog LOG [--game GAME]` | Explain a crash log, or the problem lines of a log without a crash (`-` reads from stdin). |
 | `ps5bp console send IP FILE.elf` | Send a payload to the console's ELF loader (port 9021). |
-| `ps5bp console klog IP [--out F] [--game G] [--dumps DIR]` | Live log with automatic crash diagnosis and crash-dump capture. |
+| `ps5bp console klog IP [--out F] [--game G] [--dumps DIR]` | Live log with automatic crash and stuck-in-a-loop diagnosis and crash-dump capture. |
 | `ps5bp console dumps IP --out DIR` | Only capture crash dumps (FTP port 2121). |
 | `ps5bp memfix GAME [--klog F \| --from-console D] [--result N works\|crash] [--trials]` | Memory-allocation fixes and trial tracking. |
 | `ps5bp kit add PATH --fw N [--tested-fw N] [--name] [--source] [--replace]` | Add a kit. |
@@ -471,7 +480,7 @@ before this feature: `ps5bp kit reindex`, or `kit add --replace`.
 | `compat-stubs` | **GOT-seed** stubs from `ps5bp/data/stub_contracts.json` (details below). |
 | `set3-nonfatal` | Targets 6–9: `sceAudioOut2Set3DLatency` rejects mode>1 (0x80268001) and Wwise treats that as fatal. At every call, `test eax,eax; je X` → `jmp X`. All callers must have exactly that shape, else nothing is patched. |
 | `mapflex-flags` | Clears flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory`. |
-| `savedata-mount` | `sceSaveDataMount3` request +0x18 (systemBlocks) −1 → 0. Follows register alias chains and local wrapper functions, requires a non-zero blocks (+0x10) store and an `ff ff ff ff`-ending encoding, and refuses ambiguity. Unity `SaveData.prx`: the 16-byte vector copy of blocks+systemBlocks becomes an 8-byte copy (rbx/r14/r15 forms; the request must be zeroed first; exactly one copy). Console-confirmed on ACE COMBAT 8. |
+| `savedata-mount` | `sceSaveDataMount3` request +0x18 (systemBlocks) −1 → 0. Follows register alias chains and local wrapper functions, requires a non-zero blocks (+0x10) store and an `ff ff ff ff`-ending encoding, and refuses ambiguity. Unity `SaveData.prx`: the 16-byte vector copy of blocks+systemBlocks becomes an 8-byte copy (rbx/r14/r15 forms; the request must be zeroed first; exactly one copy). Console-confirmed on ACE COMBAT 8. Sites whose mount mode (+0x20) is the constant 1 (read-only) are reported but not patched: a read-only mount never creates, FW4 kits leave −1 there, and 0 is suspected to make 4.xx reject it (`0x809f8032`, black screen on KH HD 2.8; needs a console retest). |
 | `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) → 7.1 where requested; lookup tables untouched. Console-tested on ACE COMBAT 8. |
 | `gamepresets-28` | `sceUserServiceGetGamePresets` request size store 0x30 → 0x28, including the helper-initialised form (its memset length is left alone). Already 0x28 → DONE; anything else is refused. |
 | `tls-atexit` | libc `__cxa_thread_atexit` = `push rbp; mov rbp,rsp; call PLT(qBS714-Jr3g); pop rbp; ret` (import exists from 11.00) → the call is retargeted to libc's own `__cxa_atexit`. Needs both exports and exactly that body. |
