@@ -28,6 +28,20 @@ MEMORY_APIS = {"sceKernelAllocateDirectMemory", "sceKernelAllocateMainDirectMemo
 EXIT_APIS = {"exit", "_exit", "abort", "sceKernelDebugRaiseException", "sceKernelDebugRaiseExceptionOnReleaseMode"}
 
 
+# Imports whose failure a game may turn into an assert/abort -> the ps5bp rule that fixes the matching
+# request (NIDs are those the rules themselves match on).
+IMPORT_RULES = {
+    "sDCBrmc61XU": ("savedata-prepare", "the save 'prepare' request carries a mode 4.xx does not know"),
+    "ZP4e7rlzOUk": ("savedata-mount", "the save mount request carries a systemBlocks value 4.xx rejects"),
+    "PHnuI4LhuRk": ("savedata-dirsearch", "sceSaveDataDirNameSearch2 does not exist before 5.02"),
+    "dyIhnXq-0SM": ("savedata-dirsearch", "the older save-search call failed"),
+    "-sD02mFDBh4": ("gamepresets-28", "the game-presets request is bigger than 4.xx accepts"),
+    "TViD1EZXkNI": ("set3-nonfatal", "the audio 3D-latency call fails on FW 6-9"),
+    "BKSCW2bCACA": ("tls-atexit", "thread-exit registration only exists from 11.00"),
+    "qBS714-Jr3g": ("tls-atexit", "thread-exit registration only exists from 11.00"),
+}
+
+
 @dataclass
 class Module:
     path: str
@@ -53,6 +67,7 @@ class Frame:
     module: Module | None = None
     call: str = ""                    # resolved call at this return address
     calls_in_fn: list[str] = field(default_factory=list)   # imports the calling function uses
+    call_target: int | None = None    # runtime VA the call at this return address goes to
 
     def where(self) -> str:
         if not self.module:
@@ -70,6 +85,7 @@ class Crash:
     modules: list[Module] = field(default_factory=list)
     signal: str = ""
     line: int = 0
+    abort: dict = field(default_factory=dict)     # deliberate abort found by symbolize(): see _abort_info
 
     @property
     def rip(self) -> int | None:
@@ -92,6 +108,7 @@ class Triage:
     ampr_lines: list[str] = field(default_factory=list)       # other [AMPR_EMU] / apr.index lines (first few)
     ampr_findings: list[str] = field(default_factory=list)    # explanations of the index lines
     issues: list[str] = field(default_factory=list)           # ordinary log lines explained (libSceSaveData ...)
+    layers: list[Path] = field(default_factory=list)          # game folders symbolize() read from
 
     def to_text(self) -> str:
         L = [f"title: {self.title_id or '?'}   launches: {len(self.launches)}   crashes: {len(self.crashes)}"]
@@ -167,7 +184,8 @@ def ampr_scan(lines: list[str]) -> tuple[list[str], list[str], list[str]]:
 # libSceSaveData error codes: code -> (meaning, harmless).  0x809f8022 stays noise (see NOISE).
 SAVEDATA_CODES = {
     0x809f8022: ("save data not created yet", True),
-    0x809f8032: ("rejected by this firmware", False),
+    0x809f8032: ("the save exists but can't be opened — often a save left half-created by an earlier crash; "
+                 "delete it in Settings → Saved Data and retry", False),
     0x809f0008: ("save data not found", False),
 }
 # api_id as printed by libSceSaveData; only the ones verified on a console are named
@@ -177,8 +195,6 @@ _SD_FAIL = re.compile(r"\[libSceSaveData\]\s+Failed to mount\s+(\S+?)\((0x[0-9a-
 _SD_RESULT = re.compile(r"\[libSceSaveData\]\s+GetResult\s*:\s*ExecResult\s*:\s*(0x[0-9a-fA-F]+)\(api_id=(\d+)\)")
 _SD_MOUNT = re.compile(r"\[libSceSaveData\]\s+api_id:\s*90\b.*?dirName=(\S+?),.*?blocks=(\d+),\s*systemBlocks=(-?\d+)"
                        r".*?mountMode=(0x[0-9a-fA-F]+)")
-SAVEDATA_RO_FIX = ("a read-only save mount with systemBlocks=0 is the likely cause (FW4 backports leave read-only mounts at -1); rebuild with a ps5bp "
-                   "version that leaves read-only mounts at -1 (savedata-mount)")
 
 
 def savedata_scan(lines: list[str]) -> tuple[list[str], list[str]]:
@@ -225,8 +241,6 @@ def savedata_scan(lines: list[str]) -> tuple[list[str], list[str]]:
                 ro = (mode & 7) == 1
                 txt += f"; mount parameters: {'read-only' if ro else 'read-write'} (mountMode {mode:#x}), " \
                        f"blocks={blocks}, systemBlocks={sysb}"
-                if code == 0x809f8032 and ro and sysb == 0 and SAVEDATA_RO_FIX not in sugg:
-                    sugg.append(SAVEDATA_RO_FIX)
             if n > 1:
                 txt += f"   [repeated {n}x]"
             issues.append(txt)
@@ -372,6 +386,7 @@ def symbolize(t: Triage, game: Path) -> None:
 
     cache: dict[str, tuple | None] = {}
     layers = game_layers(Path(game))
+    t.layers = list(layers)
     if len(layers) > 1 and not layers[1].is_dir():
         t.suggestions.append(f"overlay build: the game folder it was built from ({layers[1]}) is missing; "
                              "only files inside the overlay can be resolved")
@@ -408,6 +423,18 @@ def symbolize(t: Triage, game: Path) -> None:
             return name_of(nid) or nid
         return ""
 
+    def nid_of(stubs, read, rva) -> tuple[str, str]:
+        """(NID, name) of the import a call target is (PLT stub, or a jmp thunk to one)."""
+        for _ in range(3):
+            if rva in stubs:
+                n = stubs[rva].split("#")[0]
+                return n, name_of(n)
+            b = read(rva, 5)
+            if b[0] != 0xE9:
+                break
+            rva = rva + 5 + int.from_bytes(b[1:], "little", signed=True)
+        return "", ""
+
     for c in t.crashes:
         for f in c.frames:
             if not f.module or not f.module.in_app:
@@ -428,6 +455,7 @@ def symbolize(t: Triage, game: Path) -> None:
             if ins[0] == 0xE8:
                 tgt = rva + struct.unpack("<i", ins[1:])[0]
                 f.call = label(stubs, tgt) or f"function {base + tgt:#x}"
+                f.call_target = base + tgt
                 if not label(stubs, tgt):
                     f.calls_in_fn = _fn_imports(read, stubs, tgt, label)
             else:
@@ -439,6 +467,114 @@ def symbolize(t: Triage, game: Path) -> None:
                     f.call = "indirect call through GOT/table"
                 elif read(rva - 2, 2)[0] == 0xFF or read(rva - 3, 3)[0] == 0xFF:
                     f.call = "indirect call (register / vtable)"
+        _abort_check(t, c, load, nid_of)
+
+
+_TRAPS = ((b"\xcd\x41", "int 0x41"), (b"\xcd\x44", "int 0x44"), (b"\xcd\x03", "int 3"), (b"\xcc", "int3"),
+          (b"\x0f\x0b", "ud2"), (b"\x0f\xff", "ud0"), (b"\x0f\xb9", "ud1"), (b"\xf4", "hlt"))
+_JCC = {"je", "jne", "jz", "jnz", "ja", "jae", "jb", "jbe", "jg", "jge", "jl", "jle", "js", "jns"}
+
+
+def _cstr(read, rva: int, n: int = 160) -> str:
+    try:
+        raw = bytes(read(rva, n)).split(b"\0", 1)[0]
+        txt = raw.decode("utf-8")
+    except Exception:                                      # noqa: BLE001
+        return ""
+    return txt if txt and txt.isprintable() and len(raw) < n else ""
+
+
+def _abort_info(read, stubs, base: int, c: "Crash", f: "Frame", label_nid) -> dict:
+    """Is the crash a deliberate abort (int 0x41 / int3 / ud2 ... at rip) and, when the faulting
+    function was called from the first frame, which assert did it come from and which call decided it?
+
+    Works on module-relative addresses (`read(rva, n)`). Returns {} when rip is not a trap
+    instruction or the bytes cannot be read; the optional keys (file, line, checked, ...) are only
+    set for what the caller's code actually shows."""
+    from . import x86flow as xf
+    rip = c.rip - base
+    try:
+        head = bytes(read(rip, 2))
+    except Exception:                                      # noqa: BLE001
+        return {}
+    kind = next((n for pat, n in _TRAPS if head.startswith(pat)), "")
+    if not kind:
+        return {}
+    info: dict = {"kind": kind}
+    tgt = getattr(f, "call_target", None)
+    if tgt is None or not f.call.startswith("function "):
+        return info
+    tgt -= base
+    try:
+        if not (tgt <= rip < tgt + 0x400 and _fn_start(read, rip) == tgt):
+            return info                                    # the trap is not inside the called function
+    except Exception:                                      # noqa: BLE001
+        return info
+    info["helper"] = base + tgt
+    ret = f.addr - base
+    try:
+        fn = xf.function_at(read, ret - 5)
+        k = fn.index(ret - 5)
+    except Exception:                                      # noqa: BLE001
+        return info
+    ins = fn.insns
+    # argument set-up right before the call: lea rdi,[rip+str] / mov esi,imm
+    j = k - 1
+    while j >= 0 and k - j <= 8 and ins[j].mnemonic not in _JCC and ins[j].mnemonic != "call":
+        a = ins[j]
+        if a.mnemonic == "lea" and a.op_str.startswith(("rdi,", "rsi,", "rdx,")) and a.rip_target is not None:
+            s = _cstr(read, a.rip_target)
+            if s and "file" not in info and ("\\" in s or "/" in s or "." in s):
+                info["file"] = s
+        elif a.mnemonic == "mov" and a.op_str.split(",")[0] in ("esi", "edx", "ecx") and a.raw is not None \
+                and a.raw.operands[1].type == xf.x86.X86_OP_IMM and "line" not in info:
+            info["line"] = a.raw.operands[1].imm
+        j -= 1
+    if j < 0 or ins[j].mnemonic not in _JCC or ins[j].target is None or not ret <= ins[j].target < ret + 0x40:
+        return info
+    # the branch that jumps over the assert: look back for the test/cmp and the call it checks
+    m = j - 1
+    while m >= 0 and j - m <= 4 and ins[m].mnemonic not in ("test", "cmp"):
+        m -= 1
+    if m < 1 or ins[m].mnemonic not in ("test", "cmp"):
+        return info
+    p = m - 1
+    while p >= 0 and m - p <= 4 and ins[p].mnemonic != "call":
+        p -= 1
+    if p < 0 or ins[p].mnemonic != "call" or ins[p].target is None:
+        return info
+    t2 = ins[p].target
+    info["checked_call"] = base + ins[p].address
+    nid, name = label_nid(t2)
+    if nid:
+        info["checked_nid"], info["checked"] = nid, name or nid
+    else:
+        info["checked"] = f"function {base + t2:#x}"
+    return info
+
+
+def _abort_check(t: Triage, c: Crash, load, nid_of) -> None:
+    """Fill c.abort when rip is a trap instruction in an /app0/ binary (see _abort_info)."""
+    if c.rip is None:
+        return
+    m = c.module_at(c.rip)
+    if not m or not m.in_app:
+        return
+    got = load(m.rel)
+    if not got:
+        return
+    b, stubs = got
+
+    def read(r: int, n: int) -> bytes:
+        return bytes(b.read(r, n))
+    first = next((f for f in c.frames if f.module is m), None)
+    try:
+        dummy = first or Frame(0)
+        c.abort = _abort_info(read, stubs, m.start, c, dummy, lambda tg: nid_of(stubs, read, tg))
+    except Exception:                                      # noqa: BLE001 - triage never breaks on odd code
+        c.abort = {}
+    if c.abort.get("helper") and first is not None:
+        first.call += " (assert/abort helper)"
 
 
 def _fn_imports(read, stubs, start: int, label, size: int = 0x1800) -> list[str]:
@@ -483,6 +619,8 @@ def diagnose(t: Triage, game_flags: list[str] | None = None) -> None:
                                      "otherwise --rule pro-disable (base-PS5 path, no PSSR)")
             else:
                 t.suggestions.append("reduce the startup allocation (patch recipe) — compare with a working kit")
+    elif c.abort:
+        _diagnose_abort(t, c)
     else:
         rip = c.rip or 0
         m = c.module_at(rip) if c.rip is not None else None
@@ -502,5 +640,56 @@ def diagnose(t: Triage, game_flags: list[str] | None = None) -> None:
     if shadow:
         t.diagnosis.append("both the system and the fakelib copy of " + ", ".join(shadow) + " are loaded")
     if not app_fakelibs:
-        t.diagnosis.append("(note) no /app0/fakelib/ modules were loaded — expected on a high FW; on FW <= 7 "
-                           "it means the fakelib loader (BackPork) is not active")
+        t.diagnosis.append(_fakelib_note(t, c))
+
+
+_FAKELIB_TAIL = ("This is normal on a high firmware (the system libraries are new enough); on FW <= 7 it "
+                 "would mean the fakelib loader (BackPork) is not active")
+
+
+def _fakelib_note(t: Triage, c: Crash) -> str:
+    """Why no /app0/fakelib/ module is loaded: name the ones the build folder has and what ran instead."""
+    sys_paths = {m.name: m.path for m in c.modules if "/common/lib/" in m.path}
+    present: list[str] = []
+    for d in t.layers:
+        try:
+            present += sorted(p.name for p in (d / "fakelib").glob("*.sprx") if p.name not in present)
+        except OSError:
+            pass
+    if not present:
+        return "(note) no /app0/fakelib/ modules were loaded — the system libraries were used. " + _FAKELIB_TAIL
+    used = [n for n in present if n in sys_paths]
+    other = [n for n in present if n not in sys_paths]
+    txt = f"(note) none of the {len(present)} fakelib/ module(s) in the build folder were loaded ({', '.join(present)})"
+    if used:
+        txt += f"; the console's own system copies of {', '.join(used)} (/common/lib/) were used instead"
+    if other:
+        txt += f"; {', '.join(other)} not loaded at all (not needed by this game, or not reached before the crash)"
+    return txt + ". " + _FAKELIB_TAIL
+
+
+def _diagnose_abort(t: Triage, c: Crash) -> None:
+    a = c.abort
+    t.diagnosis.append(f"deliberate abort ({a['kind']} at rip) — the game stopped itself; this is not a CPU "
+                       f"fault, even though the log says '{c.reason or 'fault'}'")
+    where = ""
+    if a.get("file"):
+        where = a["file"] + (f":{a['line']}" if "line" in a else "")
+    if a.get("helper") and where:
+        msg = f"game assertion failed at {where}"
+    elif a.get("helper"):
+        msg = f"the game's assert/abort helper at {a['helper']:#x} was called"
+    else:
+        return
+    chk = a.get("checked")
+    if chk:
+        msg += f" — {chk} returned an error" if a.get("checked_nid") else f" — after the result of {chk} was checked"
+    t.diagnosis.append(msg)
+    hit = IMPORT_RULES.get(a.get("checked_nid", ""))
+    if hit:
+        rule, why = hit
+        t.suggestions.append(f"build with --rule {rule}: {why}; the failing check is the call at "
+                             f"{a['checked_call']:#x}")
+    elif a.get("checked_nid"):
+        t.suggestions.append(f"no ps5bp rule covers {chk} yet — look at what the game passes to it "
+                             f"(call at {a['checked_call']:#x}) and compare with a working kit")

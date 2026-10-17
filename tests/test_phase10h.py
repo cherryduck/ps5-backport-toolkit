@@ -24,7 +24,7 @@ def test_readonly_mount_reported_not_patched(tmp_path):
     (s,) = sites(Binary.load(g / "eboot.bin"), B)
     assert s["state"] == "unfixed" and s["mode"] == 1          # still detected...
     ((st, f),) = statuses(g, "savedata-mount")
-    assert st is None and not f.applicable and "read-only" in f.reason and "0x809f8032" in f.reason
+    assert st is None and not f.applicable and "read-only" in f.reason
     rep, frs = run(g, tmp_path / "ro", "savedata-mount")
     assert not [e for e in rep.edits if e.kind == "rule:savedata-mount"]    # ...but never written
     assert Binary.load(tmp_path / "ro/out/eboot.bin").read(TEXT_VA + store + 4, 4) == b"\xff\xff\xff\xff"
@@ -70,9 +70,9 @@ def test_klog_explains_kh_lines_without_crash():
     t = klog.parse("\n".join(KH * 3))
     klog.diagnose(t)
     txt = t.to_text()
-    assert any("CUSA05795-Launcher28US" in i and "0x809f8032" in i and "rejected by this firmware" in i
-               and "read-only" in i and "systemBlocks=0" in i and "[repeated 3x]" in i for i in t.issues)
-    assert klog.SAVEDATA_RO_FIX in t.suggestions
+    assert any("CUSA05795-Launcher28US" in i and "0x809f8032" in i and "half-created" in i
+               and "Settings → Saved Data" in i and "read-only" in i and "systemBlocks=0" in i and "[repeated 3x]" in i for i in t.issues)
+    assert not t.suggestions                              # systemBlocks rebuild advice was disproved (Phase 10i)
     assert "no fatal-signal block found" in txt and "problems found in the log lines" in txt
 
 

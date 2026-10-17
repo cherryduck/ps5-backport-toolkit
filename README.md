@@ -210,7 +210,7 @@ All rules, in plain words:
 | `frostbite-8ch` | Same problem in EA/Frostbite games (12 → 8 channels). | 4.xx |
 | `set3-nonfatal` | On firmware 6–9 an audio latency call fails and the game gives up on sound; makes the failure harmless. | never automatically (untested on 6–9) |
 | `savedata-mount` | Save-game mount request uses a value 4.xx rejects (error CE-107098-5). Read-only mounts are left alone. | when kits show it (console-tested) |
-| `savedata-prepare` | Save "prepare" request uses a mode 4.xx doesn't know. | never automatically |
+| `savedata-prepare` | Save "prepare" request uses a mode 4.xx doesn't know (2, 3 or 6). | never automatically |
 | `savedata-dirsearch` | Game uses a save-search function added in 5.02; switches it to the older one. | never automatically |
 | `gamepresets-28` | Game-presets request is 8 bytes bigger than 4.xx accepts. | 4.xx |
 | `tls-atexit` | libc uses a thread-exit function that only exists from 11.00; uses the older equivalent. | target below 11 |
@@ -266,8 +266,9 @@ same few lines forever (for example a save data mount failing again and again). 
 problem ps5bp recognises, it says *game looks stuck in a loop*, explains it, and saves `loop-<time>.txt`.
 Harmless repeating lines (a periodic heartbeat) are ignored. **Diagnose now** in the Console tab explains the
 last 2000 received lines at any moment. `ps5bp klog LOG` explains log lines even when there is no crash:
-for example `Failed to mount ...(0x809f8032)` with the mount's read-only / `systemBlocks` parameters, with
-repeats counted.
+for example `Failed to mount ...(0x809f8032)` (the save exists but can't be opened — often left
+half-created by an earlier crash: delete it in Settings → Saved Data and retry) with the mount's
+parameters, with repeats counted.
 
 ### 2. Read the diagnosis
 
@@ -278,6 +279,14 @@ Wolverine on a Pro at 11.60 it finds the start-up memory allocation failing and 
 `pssr-memory` or `pro-disable`. It also reads the Ampr emulator's own log lines (`[AMPR_EMU]`,
 `apr.index …`, `indexed-path-missing`): a missing, stale, corrupt or unwritable `ampr_emu.index` is
 named, with the fix (rebuild with `--ampr-index regen`, or run once from a writable location).
+
+**Deliberate aborts.** If the game stops itself (the CPU is on an `int 0x41`, `int3` or `ud2` instruction —
+the log still says "general protection fault"), ps5bp reads the game's assert call: its file and line, and
+the call whose result decided it. For example `game assertion failed at …\libmcPS5.cpp:906 —
+sceSaveDataPrepare returned an error`, with the matching rule (`savedata-prepare`). Function names
+(`sceSaveData…`, `printf`, …) are shown instead of raw IDs wherever ps5bp knows them. The note about
+`fakelib/` lists the fakelib files in your build that were not loaded and says the console's own system
+copies were used instead — normal on a high firmware.
 
 ### 3. The game quits at start-up: memfix
 
@@ -480,11 +489,11 @@ before this feature: `ps5bp kit reindex`, or `kit add --replace`.
 | `compat-stubs` | **GOT-seed** stubs from `ps5bp/data/stub_contracts.json` (details below). |
 | `set3-nonfatal` | Targets 6–9: `sceAudioOut2Set3DLatency` rejects mode>1 (0x80268001) and Wwise treats that as fatal. At every call, `test eax,eax; je X` → `jmp X`. All callers must have exactly that shape, else nothing is patched. |
 | `mapflex-flags` | Clears flag `0x8000` at libc's calls of the retargeted `sceKernelMapFlexibleMemory`. |
-| `savedata-mount` | `sceSaveDataMount3` request +0x18 (systemBlocks) −1 → 0. Follows register alias chains and local wrapper functions, requires a non-zero blocks (+0x10) store and an `ff ff ff ff`-ending encoding, and refuses ambiguity. Unity `SaveData.prx`: the 16-byte vector copy of blocks+systemBlocks becomes an 8-byte copy (rbx/r14/r15 forms; the request must be zeroed first; exactly one copy). Console-confirmed on ACE COMBAT 8. Sites whose mount mode (+0x20) is the constant 1 (read-only) are reported but not patched: a read-only mount never creates, FW4 kits leave −1 there, and 0 is suspected to make 4.xx reject it (`0x809f8032`, black screen on KH HD 2.8; needs a console retest). |
+| `savedata-mount` | `sceSaveDataMount3` request +0x18 (systemBlocks) −1 → 0. Follows register alias chains and local wrapper functions, requires a non-zero blocks (+0x10) store and an `ff ff ff ff`-ending encoding, and refuses ambiguity. Unity `SaveData.prx`: the 16-byte vector copy of blocks+systemBlocks becomes an 8-byte copy (rbx/r14/r15 forms; the request must be zeroed first; exactly one copy). Console-confirmed on ACE COMBAT 8. Sites whose mount mode (+0x20) is the constant 1 (read-only) are reported but not patched: a read-only mount never creates, FW4 kits leave −1 there, and 0 was suspected to make 4.xx reject it (`0x809f8032` on KH HD 2.8), but a console retest with systemBlocks=193 still failed the same way, so that was not the cause. |
 | `wwise-71` | Wwise `AkChannelConfig` 7.1.4 (12 ch) → 7.1 where requested; lookup tables untouched. Console-tested on ACE COMBAT 8. |
 | `gamepresets-28` | `sceUserServiceGetGamePresets` request size store 0x30 → 0x28, including the helper-initialised form (its memset length is left alone). Already 0x28 → DONE; anything else is refused. |
 | `tls-atexit` | libc `__cxa_thread_atexit` = `push rbp; mov rbp,rsp; call PLT(qBS714-Jr3g); pop rbp; ret` (import exists from 11.00) → the call is retargeted to libc's own `__cxa_atexit`. Needs both exports and exactly that body. |
-| `savedata-prepare` | `sceSaveDataPrepare` request mode (dword +4) 2 → 0, or 3 → 0 after a vector zero; exactly one store per call. |
+| `savedata-prepare` | `sceSaveDataPrepare` request mode (dword +4) 2 → 0, 6 → 0, or 3 → 0 after a vector zero; exactly one store per call; any other non-zero value is reported as UNKNOWN with the value shown. Mode 6 (KH HD 2.8) has not been seen in community FW4 builds yet — console-test it. |
 | `savedata-dirsearch` | 4.xx: DirNameSearch2 imported without DirNameSearch → import renamed; both imported → Search2's lazy GOT slot points at Search's PLT stub. |
 | `frostbite-8ch` | EA/Frostbite AudioOut2 12 → 8 channels (`mov r9d,0x30c → 0x208`, the 0xC00 format store, the channel count) in three known layouts; every anchor must match a layout completely. |
 | `sync-umtx` | libc / Unity `PS5Util.prx` importing SyncOnAddress Wait32/Wait64 (from 9.00) or Wake/Wait (from 6.00) on a lower target: PLT entries become shims onto FreeBSD `_umtx_op` (Wait32 op 11, Wait64/Wait op 2, Wake op 3). A helper turns the uint32 µs timeout pointer into a relative timespec, and import strings are renamed in place. Guards: no BIND_NOW, canonical lazy PLT entries, unique strings, no GOT references outside the PLT, cave space. Emulation-tested with unicorn. ABIs in the docstring of `ps5bp/core/rules/sync_umtx.py`. |

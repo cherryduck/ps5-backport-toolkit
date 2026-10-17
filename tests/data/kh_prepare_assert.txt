@@ -1,0 +1,231 @@
+<118>[SceLncService] launchApp(PPSA35909)
+<118> EXEC /app0/eboot.bin [user], vm#1, dmem#1 abi=native category=native_game <2374259 msec>
+<118>[SceLncService] launchApp(NPXS40093)
+<119> EXEC /app0/eboot.bin [system], vm#0, dmem#0 abi=native category=common_dialog <2374638 msec>
+# A user thread receives a fatal signal
+#
+# signal: 10 (SIGBUS)
+# thread ID: 102006
+# thread name: eboot.bin
+# proc ID: 118
+# proc name: eboot.bin
+# reason: general protection fault
+#
+# registers:
+# rax: 0000000000000035  rbx: 00000000006b0218
+# rcx: 0000000000000000  rdx: 00000000801a0338
+# rsi: 0000000000000000  rdi: 00000000801a0338
+# rbp: 00000007eeff9c00  rsp: 00000007eeff9c00
+# r8 : 0000000000000000  r9 : 0000000000000000
+# r10: 0000000000000000  r11: 0000000000000206
+# r12: 0000000201ad7140  r13: 00000008000751d0
+# r14: 000000000070339c  r15: 00000008000751d0
+# rip: 000000000049bd77  eflags: 00010206
+# lbf: 0000000804f33a55  lbt: 0000000804f33a9a
+# lb0: ffffffffffffffff  lb1: ffffffffffffffff
+# lb2: ffffffffffffffff  lb3: ffffffffffffffff
+# lb4: ffffffffffffffff  lb5: ffffffffffffffff
+# lb6: ffffffffffffffff  lb7: ffffffffffffffff
+#
+# backtrace:
+copyin: eboot.bin has nonsleeping lock
+# 00000000004b9b45
+# 00000000004b9efd
+# 00000000004ba8ae
+# 000000000040046c
+# 00000000004997de
+# 00000000004001f7
+# 00000000004000af
+# 0000000000000000
+#
+# dynamic libraries:
+# /app0/eboot.bin
+#  xotext: 0000000000400000:00000000005f0000 nsegs: 4
+#  fingerprint: 039886ca90351539c0ced107c893ce2900000000
+# /44GkqpXwyy/common/lib/libkernel.sprx
+#  xotext: 0000000800000000:0000000800048000 nsegs: 4
+#  fingerprint: ae65119344793be56a24da3df1f3802800000000
+# /44GkqpXwyy/common/lib/libSceLibcInternal.sprx
+#  xotext: 00000008000a4000:00000008001cc000 nsegs: 4
+#  fingerprint: 089c9d9f3c4ec5ba6537710b4dbee09000000000
+# /44GkqpXwyy/common/lib/libSceSysmodule.sprx
+#  xotext: 0000000800268000:0000000800274000 nsegs: 4
+#  fingerprint: 313c2e558ab581471c46436b41a33b7300000000
+# /44GkqpXwyy/common/lib/libSceAmpr.sprx
+#  xotext: 0000000800294000:00000008002c0000 nsegs: 4
+#  fingerprint: fc63d598c5e468144d560430fd7eee1600000000
+# /app0/sce_module/libc.prx
+#  xotext: 0000000080000000:0000000080120000 nsegs: 4
+#  fingerprint: 786fec5a5fd58dcee372faf95e22fcc800000000
+# /44GkqpXwyy/common/lib/libSceRazorCpu.sprx
+#  xotext: 0000000804b9c000:0000000804ba8000 nsegs: 4
+#  fingerprint: efca79dadfb428e27ac77cbaf1f3984700000000
+# /44GkqpXwyy/common/lib/ulobjmgr.sprx
+#  xotext: 0000000804bb8000:0000000804bbc000 nsegs: 4
+#  fingerprint: 883753b66bb892b02f25ad30e4fb45b800000000
+# /44GkqpXwyy/common/lib/libSceFiber.sprx
+#  xotext: 0000000804bc8000:0000000804bcc000 nsegs: 4
+#  fingerprint: 6a6ce652582e2ed36424df54b39da06b00000000
+# /44GkqpXwyy/common/lib/libSceUlt.sprx
+#  xotext: 0000000804bd8000:0000000804c00000 nsegs: 4
+#  fingerprint: 1676eb8e2d58e4db9b47750989bca3ae00000000
+# /44GkqpXwyy/common/lib/libSceNet.sprx
+#  xotext: 0000000804c14000:0000000804c48000 nsegs: 4
+#  fingerprint: fc16983fac96b345f1b94698f57e00a000000000
+# /44GkqpXwyy/common/lib/libSceIpmi.sprx
+#  xotext: 0000000804dfc000:0000000804e04000 nsegs: 4
+#  fingerprint: bf2df1eb2318c38759ba513e4ec95a0a00000000
+# /44GkqpXwyy/common/lib/libSceMbus.sprx
+#  xotext: 0000000804e20000:0000000804e28000 nsegs: 4
+#  fingerprint: 1a5ca105e5136eb78e758b55480b18ce00000000
+# /44GkqpXwyy/common/lib/libSceRegMgr.sprx
+#  xotext: 0000000804e34000:0000000804e38000 nsegs: 4
+#  fingerprint: 6681b99f9695195860a32a11d0d8db5300000000
+# /44GkqpXwyy/common/lib/libSceRtc.sprx
+#  xotext: 0000000804e44000:0000000804e48000 nsegs: 4
+#  fingerprint: e95d31861e520744850da98ce9eacb3c00000000
+# /44GkqpXwyy/common/lib/libSceAvSetting.sprx
+#  xotext: 0000000804e54000:0000000804e68000 nsegs: 4
+#  fingerprint: e6160555ebc6fe61e15313e703d2e43000000000
+# /44GkqpXwyy/common/lib/libSceVideoOut.sprx
+#  xotext: 0000000804e78000:0000000804e98000 nsegs: 4
+#  fingerprint: ddb946d35462f8c9429398c0808aee6400000000
+# /44GkqpXwyy/common/lib/libSceAgcDriver.sprx
+#  xotext: 0000000804eb0000:0000000804ebc000 nsegs: 4
+#  fingerprint: fcf82fa66a1664585ed1616a807e039400000000
+# /44GkqpXwyy/common/lib/libSceAgc.sprx
+#  xotext: 0000000804ed4000:0000000804eec000 nsegs: 4
+#  fingerprint: 01931f7b6af35b3f6f708e858f636cad00000000
+# /44GkqpXwyy/common/lib/libSceAudioOut.sprx
+#  xotext: 0000000804f1c000:0000000804f70000 nsegs: 4
+#  fingerprint: 047843bd03f665a71410b76cdd42795200000000
+# /44GkqpXwyy/common/lib/libSceAudioIn.sprx
+#  xotext: 00000008052f4000:00000008052fc000 nsegs: 4
+#  fingerprint: add775b154452ac552f17b2bbd77a08500000000
+# /44GkqpXwyy/common/lib/libSceAjmi.sprx
+#  xotext: 0000000805308000:000000080530c000 nsegs: 4
+#  fingerprint: 7daa6aa0bf7975e11c5d17d137e310bb00000000
+# /44GkqpXwyy/common/lib/libSceAjm.native.sprx
+#  xotext: 0000000805318000:0000000805324000 nsegs: 4
+#  fingerprint: a21e638d57fcda560e9735ee45a98e1200000000
+# /44GkqpXwyy/common/lib/libScePad.sprx
+#  xotext: 0000000805340000:0000000805358000 nsegs: 4
+#  fingerprint: 5eb34faf3a820f916f57fa25e4df4e6200000000
+# /44GkqpXwyy/common/lib/libSceNetCtl.sprx
+#  xotext: 0000000805370000:0000000805378000 nsegs: 4
+#  fingerprint: 381b9d23badfe8d69776134f1a7c636700000000
+# /44GkqpXwyy/common/lib/libSceSsl.sprx
+#  xotext: 0000000805384000:0000000805478000 nsegs: 4
+#  fingerprint: d8ec277d402c0a5f88c29076ad54820500000000
+# /44GkqpXwyy/common/lib/libSceHttpCache.sprx
+#  xotext: 00000008054f0000:0000000805538000 nsegs: 4
+#  fingerprint: aefe24ea5b7278e5e2ee9c81b526584000000000
+# /44GkqpXwyy/common/lib/libSceHttp.sprx
+#  xotext: 0000000805550000:0000000805580000 nsegs: 4
+#  fingerprint: 1e569a9264d89cb8215dbd5b7e3cdc9d00000000
+# /44GkqpXwyy/common/lib/libSceHttp2.sprx
+#  xotext: 0000000805598000:00000008055c4000 nsegs: 4
+#  fingerprint: 1d24c217ae80ada85bdd5b9a5e71c63100000000
+# /44GkqpXwyy/common/lib/libSceNpCommon.sprx
+#  xotext: 00000008055d8000:000000080560c000 nsegs: 4
+#  fingerprint: b8af484c2c2d581dddd4cdd2a427c05f00000000
+# /44GkqpXwyy/common/lib/libSceNpManager.sprx
+#  xotext: 0000000805628000:000000080566c000 nsegs: 4
+#  fingerprint: d35e80df7dc3469f5aac54271667fd1f00000000
+# /44GkqpXwyy/common/lib/libSceNpGameIntent.sprx
+#  xotext: 000000080568c000:0000000805690000 nsegs: 4
+#  fingerprint: 043c7bc9799bc5e5f8929b9faf5c38c000000000
+# /44GkqpXwyy/common/lib/libSceNpWebApi2.sprx
+#  xotext: 000000080569c000:00000008056bc000 nsegs: 4
+#  fingerprint: 728c8b2dffa56bfba58338ef30707f9400000000
+# /44GkqpXwyy/common/lib/libSceSaveData.native.sprx
+#  xotext: 00000008056cc000:00000008056fc000 nsegs: 4
+#  fingerprint: 1ead53c7398d6d30c9a29d0590c0638b00000000
+# /44GkqpXwyy/common/lib/libSceSystemService.sprx
+#  xotext: 0000000805714000:0000000805740000 nsegs: 4
+#  fingerprint: cef80234a2131c7bf54dc0fbeeb7420c00000000
+# /44GkqpXwyy/common/lib/libSceUserService.sprx
+#  xotext: 0000000805768000:0000000805778000 nsegs: 4
+#  fingerprint: f935eba1b8b6061e9b7aba62f3326b2300000000
+# /44GkqpXwyy/common/lib/libSceCommonDialog.sprx
+#  xotext: 0000000805788000:000000080578c000 nsegs: 4
+#  fingerprint: 0bad34ea245f7ffde8317e9a9cb22cd900000000
+# /44GkqpXwyy/common/lib/libSceSysUtil.sprx
+#  xotext: 0000000805798000:000000080579c000 nsegs: 4
+#  fingerprint: 33b5f532f9a9585ed447b527c0552faa00000000
+# /44GkqpXwyy/common/lib/libSceSaveDataDialog.native.sprx
+#  xotext: 00000008057a8000:00000008057c0000 nsegs: 4
+#  fingerprint: 661e774c59a87c6f2ef130e759984b1500000000
+# /app0/sce_module/libSceJobManager.prx
+#  xotext: 00000000801ac000:00000000801b8000 nsegs: 4
+#  fingerprint: 158ffc919bfa3cb1af0fe0a158d0440c00000000
+# /44GkqpXwyy/common/lib/libSceAudiodec.native.sprx
+#  xotext: 00000008057d0000:00000008057d4000 nsegs: 4
+#  fingerprint: d72be683e443761642b2bb55b338090400000000
+# /44GkqpXwyy/common/lib/libSceVdecCore.native.sprx
+#  xotext: 00000008057e0000:000000080591c000 nsegs: 4
+#  fingerprint: dc2c19bffc2db47afae5af21cb16785b00000000
+# /44GkqpXwyy/common/lib/libSceVideodec2.sprx
+#  xotext: 00000008059c8000:00000008059d0000 nsegs: 4
+#  fingerprint: 3fadc7d004709b58db5a0864d27599ea00000000
+# /44GkqpXwyy/common/lib/libSceAvPlayer.native.sprx
+#  xotext: 00000008059dc000:0000000805bb8000 nsegs: 4
+#  fingerprint: 92b88e3bce2b3ad4a2726cbe211058b500000000
+# /44GkqpXwyy/common/lib/libSceAppContent.sprx
+#  xotext: 0000000805c58000:0000000805c5c000 nsegs: 4
+#  fingerprint: 77ca5140cdce3eddd26d43305078af8400000000
+# /44GkqpXwyy/common/lib/libSceNpEntitlementAccess.sprx
+#  xotext: 0000000805c6c000:0000000805c70000 nsegs: 4
+#  fingerprint: 82e7c78bb815003d9ee800f0823ddc6c00000000
+# /44GkqpXwyy/common/lib/libScePlayGo.sprx
+#  xotext: 0000000805c80000:0000000805c84000 nsegs: 4
+#  fingerprint: 8ce0829e23d79ddd982799da418f3c2e00000000
+# /44GkqpXwyy/common/lib/libScePlayGoDialog.sprx
+#  xotext: 0000000805d0c000:0000000805d10000 nsegs: 4
+#  fingerprint: 369a3803d2f7fd8495747a099381062000000000
+# /44GkqpXwyy/common/lib/libSceNpUniversalDataSystem.sprx
+#  xotext: 0000000805d1c000:0000000805d2c000 nsegs: 4
+#  fingerprint: 5cf6ec454f6752636291a3d107a0499100000000
+# /44GkqpXwyy/common/lib/libSceNpTrophy2.sprx
+#  xotext: 0000000805d3c000:0000000805d4c000 nsegs: 4
+#  fingerprint: c37dcd55adb5c28f288ff8f2a82021e600000000
+# /44GkqpXwyy/common/lib/libSceJpegDec.sprx
+#  xotext: 0000000805d58000:0000000805d64000 nsegs: 4
+#  fingerprint: 9aa154808aef1af03be4d58eb1a0b06600000000
+# /44GkqpXwyy/common/lib/libSceNpCommerce.sprx
+#  xotext: 0000000805d70000:0000000805d74000 nsegs: 4
+#  fingerprint: cdb7beabe63fe35526e1471d70bb738500000000
+# /44GkqpXwyy/common/lib/libSceRandom.sprx
+#  xotext: 0000000805d80000:0000000805d84000 nsegs: 4
+#  fingerprint: 782a9a50f52f10804f811a098efbd8a300000000
+# /44GkqpXwyy/common/lib/libSceSystemLogger2Game.sprx
+#  xotext: 0000000805d90000:0000000805da4000 nsegs: 4
+#  fingerprint: 21125c676d63467497369800779d32ea00000000
+# /44GkqpXwyy/common/lib/libSceNpUtility.sprx
+#  xotext: 0000000805db4000:0000000805dd4000 nsegs: 4
+#  fingerprint: 2861443574a5c739816ce9ec95194fa600000000
+# /44GkqpXwyy/common/lib/libSceShare.native.sprx
+#  xotext: 0000000805dec000:0000000805dfc000 nsegs: 4
+#  fingerprint: 7f1e5a5eb9a07018c343496e6db33ff500000000
+# /44GkqpXwyy/common/lib/libSceSharePlay.sprx
+#  xotext: 0000000805e08000:0000000805e0c000 nsegs: 4
+#  fingerprint: 1cb1e086424ea0809d770aac9d35261b00000000
+# /44GkqpXwyy/common/lib/libSceResourceArbitrator.sprx
+#  xotext: 0000000805e18000:0000000805e1c000 nsegs: 4
+#  fingerprint: 76ebca1d78be47060ca16823e99a0dc300000000
+# /44GkqpXwyy/common/lib/libSceAvcap2.sprx
+#  xotext: 0000000805e28000:0000000805e30000 nsegs: 4
+#  fingerprint: 25acce60b053263918a33d25835f82b500000000
+# /44GkqpXwyy/common/lib/libSceVideoRecording.native.sprx
+#  xotext: 0000000805e54000:0000000805eb0000 nsegs: 4
+#  fingerprint: ef228ae6b614b9b3a2983760b390d8d300000000
+# /44GkqpXwyy/common/lib/libSceGameLiveStreaming.sprx
+#  xotext: 0000000805ecc000:0000000805ed4000 nsegs: 4
+#  fingerprint: 545d155e28ca46e96fa60e0132fe3b7e00000000
+# /44GkqpXwyy/common/lib/libSceContentExport.sprx
+#  xotext: 0000000805ee4000:0000000805f00000 nsegs: 4
+#  fingerprint: fa80df0cc630b9fd713a508ebbf8042a00000000
+# /44GkqpXwyy/common/lib/libSceNgs2.native.sprx
+#  xotext: 0000000805f10000:0000000805f58000 nsegs: 4
+#  fingerprint: 9ad60ff49036b2c00a0ee55fea0eb04500000000
+mDBG: Sending signal(pid: 118, tid: 102006, signo: 0xa)
