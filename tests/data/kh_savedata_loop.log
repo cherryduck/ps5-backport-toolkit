@@ -1,0 +1,5 @@
+<118>[libSceSaveData] Failed to mount CUSA05795-Launcher28US(0x809f8032)
+<118>[libSceSaveData] GetResult : ExecResult : 0x809f8032(api_id=90) 1 [90,88,89,90,88,89,90,88,89,90]
+<118>[libSceSaveData] api_id: 89, resource=7701505
+<118>[libSceSaveData] api_id: 88, size=0
+<118>[libSceSaveData] api_id: 90, userId=0x1eb70483, dirName=CUSA05795-Launcher28US, blocks=193, systemBlocks=0, mountMode=0x00000001(0x0000000a)

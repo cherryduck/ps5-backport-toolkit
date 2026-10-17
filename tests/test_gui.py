@@ -185,3 +185,20 @@ def test_console_tab_constructs(win):
     win._con_flush()
     QApplication.instance().processEvents()
     assert win.con_log.blockCount() <= win.LOG_LINES + 1
+
+
+def test_console_diagnose_now_button(win):
+    assert win.con_diag_btn.text() == "Diagnose now"
+    KH = [ln for ln in open(os.path.join(os.path.dirname(__file__), "data/kh_savedata_loop.log")).read().splitlines()]
+    for ln in KH * 2:
+        win._con_line(ln)
+    win.con_diag_btn.click()
+    t = time.time()
+    while win.con_diag_worker.isRunning() and time.time() - t < 20:
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
+    QApplication.instance().processEvents()
+    txt = win.con_triage.toPlainText()
+    assert "0x809f8032" in txt and "repeated 2x" in txt and win.con_diag_btn.isEnabled()
+    win._con_loop("game looks stuck in a loop: x", "/tmp/loop-1.txt")
+    assert "stuck" in win.con_triage.toPlainText()

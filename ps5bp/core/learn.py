@@ -46,6 +46,7 @@ class FileReport:
     edits: list[dict] = field(default_factory=list)           # learned ops (with notes)
     problem: str = ""
     header_only: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 def _regions(a: bytes, b: bytes, gap: int = 4) -> list[tuple[int, int]]:
@@ -159,6 +160,16 @@ def learn_file(orig: Path, kit: Path, rel: str, title_id: str, scanner_cache: di
                 if miss:
                     op["note"] += f"   [{miss}]"
                 ops.append(op)
+    try:
+        from .rules.savedata_mount import sites as sd_sites
+        for s_ in sd_sites(ob, base):                 # read-only mounts: ps5bp leaves them (Phase 10h)
+            if s_["state"] == "unfixed" and s_.get("mode") == 1:
+                a, z = s_["store"], s_["store"] + s_["len"]
+                if ob.read(a - base, z - a) != nb.read(a - base, z - a):
+                    rep.notes.append(f"{s_['store']:#x}: savedata-mount at a read-only mount (mode 1) — the kit "
+                                     "changed it, ps5bp leaves it (read-only site, ps5bp leaves it)")
+    except Exception:                                   # noqa: BLE001
+        pass
     rep.edits = ops
     if not ops:
         return rep, None
@@ -268,6 +279,8 @@ def learn_report(original: Path, kit: Path, recipe: bool = False, out: Path = Pa
             totals[k] = totals.get(k, 0) + v
         if r.problem:
             L.append(f"{r.file}: {r.problem}")
+        for n in r.notes:
+            L.append(f"{r.file}: {n}")
         for e in r.edits:
             L.append(f"{r.file}: {e['va']}  {e['old']} -> {e['new']}   {e['note']}")
     L.append("\nchanged bytes by kind: " + ", ".join(f"{k} {v}" for k, v in sorted(totals.items())))

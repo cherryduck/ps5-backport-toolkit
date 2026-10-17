@@ -91,6 +91,7 @@ class Triage:
     ampr_versions: list[str] = field(default_factory=list)    # '[AMPR_EMU] name=libSceAmpr version=...' lines
     ampr_lines: list[str] = field(default_factory=list)       # other [AMPR_EMU] / apr.index lines (first few)
     ampr_findings: list[str] = field(default_factory=list)    # explanations of the index lines
+    issues: list[str] = field(default_factory=list)           # ordinary log lines explained (libSceSaveData ...)
 
     def to_text(self) -> str:
         L = [f"title: {self.title_id or '?'}   launches: {len(self.launches)}   crashes: {len(self.crashes)}"]
@@ -111,6 +112,8 @@ class Triage:
                     L.append(f"{'':63}function also calls: {', '.join(f.calls_in_fn[:8])}")
         if self.ampr_versions or self.ampr_lines:
             L += ["", "Ampr emulator log lines:"] + [f"   {x}" for x in self.ampr_versions[:2] + self.ampr_lines[:10]]
+        if self.issues:
+            L += ["", "problems found in the log lines:"] + [f"   ! {x}" for x in self.issues]
         if self.diagnosis:
             L += ["", "diagnosis:"] + [f"   * {d}" for d in self.diagnosis]
         if self.suggestions:
@@ -160,6 +163,84 @@ def ampr_scan(lines: list[str]) -> tuple[list[str], list[str], list[str]]:
     return versions, other, findings
 
 
+# ---- ordinary log lines (no crash block needed) ----------------------------------------------
+# libSceSaveData error codes: code -> (meaning, harmless).  0x809f8022 stays noise (see NOISE).
+SAVEDATA_CODES = {
+    0x809f8022: ("save data not created yet", True),
+    0x809f8032: ("rejected by this firmware", False),
+    0x809f0008: ("save data not found", False),
+}
+# api_id as printed by libSceSaveData; only the ones verified on a console are named
+SAVEDATA_APIS = {90: "sceSaveDataMount (Mount3)"}
+_PFX = re.compile(r"^\s*<\d+>")
+_SD_FAIL = re.compile(r"\[libSceSaveData\]\s+Failed to mount\s+(\S+?)\((0x[0-9a-fA-F]+)\)")
+_SD_RESULT = re.compile(r"\[libSceSaveData\]\s+GetResult\s*:\s*ExecResult\s*:\s*(0x[0-9a-fA-F]+)\(api_id=(\d+)\)")
+_SD_MOUNT = re.compile(r"\[libSceSaveData\]\s+api_id:\s*90\b.*?dirName=(\S+?),.*?blocks=(\d+),\s*systemBlocks=(-?\d+)"
+                       r".*?mountMode=(0x[0-9a-fA-F]+)")
+SAVEDATA_RO_FIX = ("a read-only save mount with systemBlocks=0 is the likely cause (FW4 backports leave read-only mounts at -1); rebuild with a ps5bp "
+                   "version that leaves read-only mounts at -1 (savedata-mount)")
+
+
+def savedata_scan(lines: list[str]) -> tuple[list[str], list[str]]:
+    """(issues, suggestions) for libSceSaveData lines: failed mounts and failing API calls, with the mount
+    parameters (read-only / systemBlocks) matched to the failure by directory name. Repeats are counted."""
+    params: dict[str, tuple[int, int, int]] = {}          # dirName -> (blocks, systemBlocks, mountMode), last seen
+    fails: dict[tuple[str, int], int] = {}                # (dir, code) -> count
+    results: dict[tuple[int, int], int] = {}              # (code, api) -> count
+    order: list = []
+    for ln in lines:
+        if "[libSceSaveData]" not in ln:
+            continue
+        m = _SD_MOUNT.search(ln)
+        if m:
+            params[m[1]] = (int(m[2]), int(m[3]), int(m[4], 16))
+            continue
+        m = _SD_FAIL.search(ln)
+        if m:
+            k = ("mount", m[1], int(m[2], 16))
+            fails[k[1:]] = fails.get(k[1:], 0) + 1
+            if k not in order:
+                order.append(k)
+            continue
+        m = _SD_RESULT.search(ln)
+        if m:
+            k = ("result", int(m[1], 16), int(m[2]))
+            results[k[1:]] = results.get(k[1:], 0) + 1
+            if k not in order:
+                order.append(k)
+    issues: list[str] = []
+    sugg: list[str] = []
+    mounted_codes = {c for (_, c) in fails}
+    for k in order:
+        if k[0] == "mount":
+            _, d, code = k
+            meaning, harmless = SAVEDATA_CODES.get(code, (f"unknown libSceSaveData error {code:#x}", False))
+            if harmless:
+                continue
+            n = fails[(d, code)]
+            txt = f"save data mount of {d} failed with {code:#x} ({meaning})"
+            p = params.get(d)
+            if p:
+                blocks, sysb, mode = p
+                ro = (mode & 7) == 1
+                txt += f"; mount parameters: {'read-only' if ro else 'read-write'} (mountMode {mode:#x}), " \
+                       f"blocks={blocks}, systemBlocks={sysb}"
+                if code == 0x809f8032 and ro and sysb == 0 and SAVEDATA_RO_FIX not in sugg:
+                    sugg.append(SAVEDATA_RO_FIX)
+            if n > 1:
+                txt += f"   [repeated {n}x]"
+            issues.append(txt)
+        else:
+            _, code, api = k
+            if code in mounted_codes or code == 0 or SAVEDATA_CODES.get(code, ("", False))[1]:
+                continue                                   # same failure already reported above / harmless
+            meaning = SAVEDATA_CODES.get(code, (f"unknown libSceSaveData error {code:#x}", False))[0]
+            n = results[(code, api)]
+            issues.append(f"libSceSaveData call api_id={api} ({SAVEDATA_APIS.get(api, 'API not identified')}) "
+                          f"returned {code:#x} ({meaning})" + (f"   [repeated {n}x]" if n > 1 else ""))
+    return issues, sugg
+
+
 def parse(text: str) -> Triage:
     t = Triage()
     lines = text.splitlines()
@@ -174,6 +255,9 @@ def parse(text: str) -> Triage:
             t.noise.append(f"{why}  [{n}x '{pat}']")
 
     t.ampr_versions, t.ampr_lines, t.ampr_findings = ampr_scan(lines)
+    iss, sug = savedata_scan(lines)
+    t.issues += iss
+    t.suggestions += [x for x in sug if x not in t.suggestions]
     i = 0
     while i < len(lines):
         if "A user thread receives a fatal signal" not in lines[i] and not re.match(r"#\s*reason:", lines[i]):
