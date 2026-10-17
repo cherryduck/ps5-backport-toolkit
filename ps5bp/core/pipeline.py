@@ -76,6 +76,8 @@ class BuildOptions:
     klog_text: str | None = None                       # same, as text (GUI)
     replace_dump: dict[str, str | None] = field(default_factory=dict)  # loading layer -> kit (None = best)
     stubs_from: list[str] = field(default_factory=list)                # kit-stubs: only these kits
+    seeds: list[str] = field(default_factory=list)                     # compat-stubs: NIDs forced / manual (--seed)
+    seed_plt_fallback: bool = False                                    # compat-stubs: PLT overwrite where a GOT seed is refused
     console_fw: str | None = None                      # '11.60': advice only (warns when SDK trails it)
     also_targets: list[tuple[int, int]] = field(default_factory=list)  # (major, minor): SDK-only siblings
 
@@ -641,6 +643,12 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     # 3b. fix rules
     from .rules import RuleContext, detect_all, resolve
     enabled = set(opts.rules) | ({"user-patch"} if patches else set())
+    if opts.seeds:
+        from .rules.contracts import load as load_contracts
+        bad = [n for n in opts.seeds if n not in load_contracts()]
+        if bad:
+            raise BuildError(f"--seed: no stub contract for {', '.join(bad)} (see ps5bp/data/stub_contracts.json)")
+        enabled.add("compat-stubs")                      # --seed NID implies the rule
     try:
         active = {r.name: r for r in resolve(enabled, set(opts.no_rules))}
     except ValueError as e:
@@ -649,8 +657,12 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                       edit=lambda file, kind, off, old, new, note="": rep.edits.append(
                           Edit(file, kind, off, old, new, note)),
                       options={"patches": patches, "enabled": set(active), "stubs_from": opts.stubs_from,
-                               "db": db})
-    for f in detect_all(ctx):
+                               "db": db, "seeds": list(opts.seeds), "seed_plt_fallback": opts.seed_plt_fallback})
+    found = detect_all(ctx)
+    for n in opts.seeds:
+        if not any(f.rule == "compat-stubs" and f.data.get("nid") == n for f in found):
+            rep.warnings.append(f"--seed {n}: no game binary imports it (or a chosen fakelib / game module provides it)")
+    for f in found:
         applied = False
         if f.rule in active:
             if f.applicable:
@@ -659,7 +671,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
                 except Exception as e:                       # noqa: BLE001
                     raise BuildError(f"rule {f.rule} failed on {f.file}: {e}") from None
                 applied = True
-            else:
+            elif f.data.get("status") != "DONE":             # DONE = already in the wanted state: not a warning
                 rep.warnings.append(f"rule {f.rule}: {f.title} not applicable: {f.reason}")
         elif f.recommended and f.applicable:
             rep.warnings.append(f"recommended: --rule {f.rule}  ({f.title}{'; ' + f.reason if f.reason else ''})")
