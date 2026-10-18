@@ -1,6 +1,6 @@
-# PS5 Backport Linux
+# PS5 Backport Toolkit
 
-*A Linux toolkit for backporting PS5 games. The commands are `ps5bp` (command line) and `ps5bp-gui` (app).*
+*A Windows and Linux toolkit for backporting PS5 games. The commands are `ps5bp` (command line) and `ps5bp-gui` (app).*
 
 **ps5bp turns a PS5 game dump into a *backport*: a version of the game that runs on a console
 with older firmware than the game was made for.** It has a graphical app (`ps5bp-gui`) and a
@@ -53,31 +53,58 @@ from a decrypted dump and copy the result onto the console your usual way.
 
 ## Install
 
-You need a Linux PC with git and Python 3.11 or newer. First get the code:
+ps5bp runs on **Windows 10/11** and **Linux** (x86-64).
+
+### Download (easiest)
+
+Get the file for your system from the
+[latest release](https://github.com/cherryduck/ps5-backport-toolkit/releases/latest):
+
+- **Windows:** `ps5bp-<version>-windows-x64.zip`. Unzip it anywhere and run `ps5bp-gui.exe`
+  (the app) or `ps5bp.exe` (command line, from a terminal in that folder). The files aren't
+  code-signed, so SmartScreen may warn the first time: *More info* → *Run anyway*.
+- **Linux:** `ps5bp-<version>-linux-x86_64.tar.gz` (needs glibc 2.35 or newer, i.e. any distro
+  from 2022 on). Extract it, then run `./ps5bp-gui` or `./ps5bp` from the folder.
+  `./install-desktop.sh` in the same folder adds "PS5 Backport Toolkit" to your app menu.
+
+### From source
+
+You need git and Python 3.11 or newer. First get the code:
 ```
-git clone https://github.com/cherryduck/ps5-backport-linux.git
-cd ps5-backport-linux
+git clone https://github.com/cherryduck/ps5-backport-toolkit.git
+cd ps5-backport-toolkit
 ```
 Then pick one:
 
 **Standalone app (nothing else to install afterwards):**
 ```
-scripts/build-bundle.sh                              # builds dist/ps5bp/ps5bp and dist/ps5bp/ps5bp-gui
-scripts/install-desktop.sh dist/ps5bp/ps5bp-gui      # adds "PS5 Backport Linux" to your app menu
+scripts/build-bundle.sh                              # Linux: builds dist/ps5bp/ps5bp and dist/ps5bp/ps5bp-gui
+scripts/install-desktop.sh dist/ps5bp/ps5bp-gui      # adds "PS5 Backport Toolkit" to your app menu
 ```
-After pulling new changes, run `scripts/build-bundle.sh` again, or the app menu keeps starting
-the old version.
+```
+scripts\build-bundle.ps1                             # Windows (PowerShell): dist\ps5bp\ps5bp.exe and ps5bp-gui.exe
+```
+After pulling new changes, build again, or you keep running the old version.
 
 **With pipx:**
 ```
-pipx install '.[gui]'                                           # puts ps5bp and ps5bp-gui on your PATH
-scripts/install-desktop.sh                           # optional app-menu entry
+pipx install '.[gui]'                                # puts ps5bp and ps5bp-gui on your PATH
+scripts/install-desktop.sh                           # Linux, optional app-menu entry
 ```
 
 **For development:** `python -m venv .venv && .venv/bin/pip install -e '.[gui,dev]'`
+(Windows: `.venv\Scripts\pip install -e .[gui,dev]`)
 
-ps5bp keeps its data (kits, history) in `~/.local/share/ps5bp/`. Set `PS5BP_HOME` to use
-another folder.
+### Where ps5bp keeps its data
+
+Kits, history and crash dumps live in:
+
+| System | Folder |
+|---|---|
+| Linux | `~/.local/share/ps5bp/` (or `$XDG_DATA_HOME/ps5bp/`) |
+| Windows | `%LOCALAPPDATA%\ps5bp\` |
+
+Set `PS5BP_HOME` to use another folder.
 
 ---
 
@@ -332,7 +359,7 @@ Only a console boot tells you whether a fix works; ps5bp records your results, i
 | Mode | What you get |
 |---|---|
 | `overlay` (default) | Only changed files + `fakelib/`. Copy it over the game. |
-| `full` | A complete copy of the game with the changes (unchanged files are reflinked when possible, so it's fast and doesn't double disk use). |
+| `full` | A complete copy of the game with the changes (on Linux btrfs/XFS unchanged files are reflinked, so it's fast and doesn't double disk use; elsewhere they are copied). |
 | `inplace` | Edits the game folder directly, keeping `.orig` backups. |
 
 `--dry-run` shows what would happen without writing anything.

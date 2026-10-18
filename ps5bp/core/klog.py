@@ -362,7 +362,7 @@ def game_layers(game: Path) -> list[Path]:
     rp = game / "backport-report.json"
     if rp.is_file():
         try:
-            rep = json.loads(rp.read_text())
+            rep = json.loads(rp.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             rep = {}
         base = rep.get("game")

@@ -218,7 +218,7 @@ def cmd_undo(a) -> int:
 
 def cmd_klog(a) -> int:
     from .core import klog
-    text = sys.stdin.read() if a.log == "-" else Path(a.log).read_text(errors="replace")
+    text = sys.stdin.read() if a.log == "-" else Path(a.log).read_text(errors="replace", encoding="utf-8")
     t = klog.parse(text)
     flags: list[str] = []
     if a.game:
@@ -325,7 +325,7 @@ def cmd_memfix(a) -> int:
             return 2
         print(f"using crash log {src}")
         a.klog = str(src)
-    kt = Path(a.klog).read_text(errors="replace") if a.klog else None
+    kt = Path(a.klog).read_text(errors="replace", encoding="utf-8") if a.klog else None
     if a.result is not None:
         if a.outcome not in ("works", "crash"):
             print("give the outcome: --result N works|crash", file=sys.stderr)
@@ -420,7 +420,11 @@ def cmd_kit(a) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="ps5bp", description="PS5 backport toolkit")
+    for stream in (sys.stdout, sys.stderr):
+        # Windows pipes/redirects default to the ANSI code page, which cannot encode ★, → or —
+        if stream is not None and hasattr(stream, "reconfigure") and (stream.encoding or "").lower() != "utf-8":
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    ap = argparse.ArgumentParser(prog="ps5bp", description="PS5 Backport Toolkit")
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
     an = sub.add_parser("analyze", help="scan a game folder (read-only)")

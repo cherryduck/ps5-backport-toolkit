@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ps5bp"
-version = "0.1.0"
+dynamic = ["version"]                 # single source: ps5bp/__init__.py __version__
 description = "Analyze and backport PS5 game dumps to older firmware"
 requires-python = ">=3.11"
 license = "MIT"
@@ -17,6 +17,12 @@ dev = ["pytest", "unicorn"]
 [project.scripts]
 ps5bp = "ps5bp.cli:main"
 ps5bp-gui = "ps5bp.gui:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "ps5bp.__version__"}
+
+[project.urls]
+Homepage = "https://github.com/cherryduck/ps5-backport-toolkit"
 
 [tool.setuptools.packages.find]
 include = ["ps5bp*"]

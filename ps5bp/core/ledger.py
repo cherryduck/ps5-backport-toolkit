@@ -47,7 +47,7 @@ def load(warn: Callable[[str], None] = _warn_default) -> list[dict]:
     """The ledger's entries. A corrupt file is kept as applied.json.bak and replaced by an empty ledger."""
     p = ledger_path()
     try:
-        raw = p.read_text()
+        raw = p.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     except OSError as e:
@@ -75,7 +75,7 @@ def _save(entries: list[dict]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=p.parent)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"version": VERSION, "entries": entries}, f, indent=1)
             f.flush()
             os.fsync(f.fileno())
@@ -144,7 +144,7 @@ def resolve_member(root: Path, rel: str) -> str:
             raise AmbiguousMember(f"{rel}: '{part}' matches {len(hits)} entries that differ only in case "
                                   f"({', '.join(sorted(hits))}) in {cur}")
         if not hits:
-            return str(Path(*out, *parts[i:])) if out or parts[i:] else rel
+            return Path(*out, *parts[i:]).as_posix() if out or parts[i:] else rel
         out.append(hits[0])
         cur = cur / hits[0]
-    return str(Path(*out))
+    return Path(*out).as_posix()

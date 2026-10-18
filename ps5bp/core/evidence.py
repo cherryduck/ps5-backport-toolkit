@@ -68,9 +68,16 @@ def is_system_module(name: str) -> bool:
 
 
 def home() -> Path:
+    """ps5bp's data folder (kit library, ledger, recipes, dumps).
+
+    $PS5BP_HOME if set; Windows: %LOCALAPPDATA%\\ps5bp; elsewhere: $XDG_DATA_HOME/ps5bp
+    (~/.local/share/ps5bp)."""
     if os.environ.get("PS5BP_HOME"):
         return Path(os.environ["PS5BP_HOME"])
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "ps5bp"
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "ps5bp"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ps5bp"
 
 
 @dataclass
@@ -170,7 +177,7 @@ class EvidenceDB:
         infos: list[BinaryInfo] = []
         for p in iter_binaries(root):
             rel = p.relative_to(root)
-            role = "fakelib" if rel.parts[0] == "fakelib" else ("eboot" if str(rel) == "eboot.bin" else "module")
+            role = "fakelib" if rel.parts[0] == "fakelib" else ("eboot" if rel.as_posix() == "eboot.bin" else "module")
             infos.append(scan_binary(p, root, role))
         bad = [i for i in infos if i.error]
         if bad:

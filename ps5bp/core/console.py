@@ -283,7 +283,7 @@ def save_loop(text: str, out_dir: str | Path) -> Path:
     while p.exists():
         p = out / f"{base}-{n}.txt"
         n += 1
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     return p
 
 
@@ -309,7 +309,7 @@ def save_crash(block: str, out_dir: str | Path) -> Path:
     while p.exists():
         p = out / f"{base.name}-{n}.txt"
         n += 1
-    p.write_text(block)
+    p.write_text(block, encoding="utf-8")
     return p
 
 
