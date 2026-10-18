@@ -29,7 +29,7 @@ from typing import Callable
 
 from .. import __version__
 from . import amprindex, dynamic, ledger, sdk
-from .binary import Binary
+from .binary import Binary, sniff
 from .coverage import Coverage, analyze as coverage_analyze
 from .evidence import EvidenceDB
 from .nid import split as nid_split
@@ -359,11 +359,8 @@ def _pj_span_edit(raw: bytes, old_want: int, new_want: int) -> tuple[bytes, list
 
 
 def _is_binary_file(p: Path) -> bool:
-    try:
-        with open(p, "rb") as f:
-            return f.read(4) in (bytes.fromhex("4f153d1d"), b"\x7fELF")
-    except OSError:
-        return False
+    """SELF (PS4- or PS5-style header) or plain ELF: the same test the scanner uses."""
+    return sniff(p) is not None
 
 
 def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: int, minor: int,
@@ -480,6 +477,14 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
                     problems.append(f"{rel}: SDK is not the sibling pair")
                     continue
                 verified.append(rel)
+            elif rel != "sce_sys/param.json":
+                # safety net: no binary may be left declaring the main build's SDK
+                try:
+                    p = sdk.find(Binary(bb, sd / rel))
+                except Exception:                                         # noqa: BLE001
+                    p = None                                              # not an executable
+                if p is not None and p.ps5 == main_ps5:
+                    problems.append(f"{rel}: still declares the main build's SDK {sdk.fw_str(main_ps5)}")
             elif rel == "sce_sys/param.json":
                 try:
                     json.loads(bb.decode("utf-8-sig"))
