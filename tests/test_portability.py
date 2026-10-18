@@ -71,3 +71,30 @@ def test_cli_output_survives_non_utf8_stdout(monkeypatch):
     with pytest.raises(SystemExit):
         cli.main(["--version"])
     assert out.encoding.lower() == "utf-8"
+
+
+def test_host_env_restores_ld_library_path_when_frozen(monkeypatch):
+    pytest.importorskip("PyQt6")
+    from ps5bp.gui import window
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle/_internal:/opt/x")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/x")
+    assert window.host_env()["LD_LIBRARY_PATH"] == "/bundle/_internal:/opt/x"      # not frozen: untouched
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    env = window.host_env()
+    assert env["LD_LIBRARY_PATH"] == "/opt/x" and "LD_LIBRARY_PATH_ORIG" not in env
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG")
+    assert "LD_LIBRARY_PATH" not in window.host_env()                            # user had none
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="xdg-open path")
+def test_open_folder_uses_xdg_open_with_host_env(monkeypatch, tmp_path):
+    pytest.importorskip("PyQt6")
+    from ps5bp.gui import window
+    calls = []
+    monkeypatch.setattr(window.subprocess, "Popen", lambda args, **kw: calls.append((args, kw)))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle/_internal")
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+    assert window.open_folder(tmp_path)
+    (args, kw), = calls
+    assert args == ["xdg-open", str(tmp_path)] and "LD_LIBRARY_PATH" not in kw["env"]

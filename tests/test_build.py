@@ -201,6 +201,34 @@ def test_sibling_differs_only_in_sdk_fields(game, db, tmp_path, mode):
     assert json.loads((out / "backport-report.json").read_text())["siblings"]
 
 
+@pytest.mark.parametrize("mode", ["overlay", "full"])
+def test_sibling_raises_ps5_style_selfs(tmp_path, db, mode):
+    """Regression (GBAtemp report): binaries with the PS5-style SELF header (54 14 f5 ee) were left
+    at the main target in --also-target siblings; only param.json and PS4-style SELFs moved."""
+    g = tmp_path / "PPSA99998"
+    ps5 = bytes.fromhex("5414f5ee")
+    for rel, spec in (("eboot.bin", Spec(import_libs=["libkernel", "libSceFoo"],
+                                         imports=[("KKKKKKKKKK1", 0), ("FFFFFFFFFF1", 1)])),
+                      ("game2.elf", Spec(import_libs=["libkernel"], imports=[("KKKKKKKKKK1", 0)])),
+                      ("sce_module/libc.prx", Spec(kind="module", module="libc", ps5_sdk=0x07000038,
+                                                   import_libs=["libkernel"], imports=[("4h6F1LLbTiw", 0)]))):
+        (g / rel).parent.mkdir(parents=True, exist_ok=True)
+        elf, _ = build_elf(spec)
+        (g / rel).write_bytes(build_self(elf, magic=ps5))
+    (g / "sce_sys").mkdir()
+    (g / "sce_sys/param.json").write_bytes(PJ.encode())
+    out = tmp_path / "out"
+    build(g, BuildOptions(target=4, out=out, mode=mode, also_targets=[(5, 0), (9, 0)]), db, log=lambda m: None)
+    main = _tree(out)
+    bins = [r for r in main if r != "sce_sys/param.json" and not r.startswith("backport-report")]
+    assert {"eboot.bin", "game2.elf", "sce_module/libc.prx"} <= set(bins)
+    for suffix, tgt in (("-fw5", 5), ("-fw9", 9)):
+        st = _tree(tmp_path / ("out" + suffix))
+        for r in bins:
+            p = sdk.find(Binary(st[r], r))
+            assert (p.ps5, p.ps4) == sdk.target_pair(tgt), (suffix, r, hex(p.ps5))
+
+
 def test_sibling_fails_on_stray_change_and_is_removed(game, db, tmp_path, monkeypatch):
     import ps5bp.core.pipeline as pl
     real = pl.clone_file
