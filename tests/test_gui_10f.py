@@ -145,7 +145,7 @@ def test_replace_pickers(win, game, tmp_path, monkeypatch):
 # ---- 3. undo -----------------------------------------------------------------------------------
 def applied_backport(win, game, tmp_path):
     win.game_edit.setText(str(game))
-    before = {str(p.relative_to(game)): p.read_bytes() for p in game.rglob("*") if p.is_file()}
+    before = {p.relative_to(game).as_posix(): p.read_bytes() for p in game.rglob("*") if p.is_file()}
     out = tmp_path / "out"
     build(game, BuildOptions(target=4, out=out), EvidenceDB(tmp_path / "home"), log=lambda m: None)
     shutil.copytree(out, game, dirs_exist_ok=True, ignore=shutil.ignore_patterns("backport-report.*"))
@@ -172,8 +172,8 @@ def test_undo_dialog_flow(win, game, tmp_path):
     assert d.worker is not None                               # off the GUI thread
     spin(lambda: d.worker is None)
     assert d.result == "done" and d.applied
-    assert {str(p.relative_to(game)): p.read_bytes() for p in game.rglob("*") if p.is_file()
-            if str(p.relative_to(game)) in before} == before
+    assert {p.relative_to(game).as_posix(): p.read_bytes() for p in game.rglob("*") if p.is_file()
+            if p.relative_to(game).as_posix() in before} == before
 
 
 def test_undo_dialog_refusal_and_force(win, game, tmp_path):

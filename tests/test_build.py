@@ -58,7 +58,7 @@ def test_overlay_build(game, db, tmp_path):
     out = tmp_path / "out"
     rep = build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
     assert rep.ok
-    files = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+    files = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
     assert files == ["backport-report.json", "backport-report.txt", "eboot.bin", "fakelib/libSceFoo.sprx",
                      "sce_module/libc.prx", "sce_sys/param.json"]          # old.prx (SDK 3) untouched
     for f in ("eboot.bin", "sce_module/libc.prx", "fakelib/libSceFoo.sprx"):
@@ -126,7 +126,7 @@ from pathlib import Path                                    # noqa: E402
 
 
 def _tree(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in Path(root).rglob("*")
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in Path(root).rglob("*")
             if p.is_file() and not p.name.startswith("backport-report")}
 
 
