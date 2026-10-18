@@ -134,7 +134,9 @@ def test_cli_console_klog_reports_loop(tmp_path, servers, capsys):
     srv = servers(lambda c, n: c.sendall(("\n".join(KH * 6) + "\n").encode()) or threading.Event().wait(1.5))
     out = tmp_path / "log.txt"
     import threading as th
-    t = th.Timer(1.0, lambda: os.kill(os.getpid(), 2))        # Ctrl-C ends the klog command
+    import _thread
+    t = th.Timer(1.0, _thread.interrupt_main)                # Ctrl-C ends the klog command (os.kill(pid, 2)
+                                                             # would terminate the whole process on Windows)
     t.start()
     try:
         cli.main(["console", "klog", "127.0.0.1", "--port", str(srv.port), "--out", str(out)])
