@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from collections import deque
 from pathlib import Path
 
@@ -47,6 +49,35 @@ def fill(t: QTableWidget, rows: list[list], colors: dict[int, str] | None = None
             if colors and r in colors:
                 it.setForeground(QBrush(QColor(colors[r])))
             t.setItem(r, c, it)
+
+
+def host_env() -> dict[str, str]:
+    """The environment for launching the user's own programs from the bundled app.
+
+    A PyInstaller bundle puts its _internal folder first in LD_LIBRARY_PATH (keeping the user's
+    value as LD_LIBRARY_PATH_ORIG). Programs started from it (xdg-open -> Dolphin, Nautilus, ...)
+    would then load the bundle's older Qt and die at once, so restore the original value."""
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig is not None:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+def open_folder(path: str | Path) -> bool:
+    """Show `path` in the system file manager. Returns False if nothing could be started."""
+    path = str(path)
+    if sys.platform.startswith("linux"):
+        try:
+            subprocess.Popen(["xdg-open", path], env=host_env(), start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            pass                                    # no xdg-open: let Qt try
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
 
 def settings_store() -> QSettings:
@@ -707,7 +738,8 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_headless", False):
             box.exec()
             if box.clickedButton() is openb:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(rep.out))
+                if not open_folder(rep.out):
+                    QMessageBox.warning(self, "Open folder", f"Could not open a file manager for:\n{rep.out}")
 
     @staticmethod
     def libc_line(cc: dict) -> str:
