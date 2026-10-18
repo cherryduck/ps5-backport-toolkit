@@ -41,7 +41,7 @@ if not WINDOWS:
         a.binaries = trim(a.binaries)
         a.datas = trim(a.datas)
 
-STRIP = not WINDOWS                     # no `strip` tool on Windows
+STRIP = False   # never strip: it corrupts auditwheel-patched libs (numpy openblas) with older binutils; saves only ~8 MB
 ICON = str(ROOT / "packaging/ps5bp.ico") if WINDOWS else None
 cli_exe = EXE(PYZ(cli.pure), cli.scripts, [], exclude_binaries=True, name="ps5bp", console=True,
               strip=STRIP, icon=ICON)

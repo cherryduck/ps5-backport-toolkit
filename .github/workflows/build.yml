@@ -75,6 +75,7 @@ jobs:
           exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
           dist/ps5bp/ps5bp$exe --version
           dist/ps5bp/ps5bp$exe --help > /dev/null
+          dist/ps5bp/ps5bp$exe rules > /dev/null          # loads every rule module (numpy, capstone)
           python packaging/smoke_gui.py "dist/ps5bp/ps5bp-gui$exe"
       - name: Package
         id: pkg
