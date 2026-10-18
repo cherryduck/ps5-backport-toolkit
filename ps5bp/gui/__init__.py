@@ -11,7 +11,7 @@ def main() -> int:
     from .. import __version__
     from .window import MainWindow
     app = QApplication(sys.argv)
-    app.setApplicationName("PS5 Backporter")
+    app.setApplicationName("PS5 Backport Toolkit")
     app.setApplicationVersion(__version__)
     app.setDesktopFileName("ps5bp")                 # Wayland app_id -> matches ps5bp.desktop
     from importlib import resources

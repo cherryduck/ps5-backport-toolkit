@@ -15,7 +15,6 @@ else moved.
 from __future__ import annotations
 
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -216,7 +215,7 @@ def ampr_describe_lines(info: dict) -> list[str]:
 
 def load_retargets() -> list[tuple[str, str, int, str]]:
     """(old NID, new NID, max target FW, note) rows from data/nid_retarget.txt."""
-    text = resources.files("ps5bp").joinpath("data/nid_retarget.txt").read_text()
+    text = resources.files("ps5bp").joinpath("data/nid_retarget.txt").read_text(encoding="utf-8")
     out = []
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -288,7 +287,7 @@ def is_previous_build(out: Path) -> bool:
 def previous_build_title(out: Path) -> str | None:
     """Title id of the earlier ps5bp build in `out` ('' if unknown), None if there is none."""
     try:
-        return json.loads((out / "backport-report.json").read_text()).get("title_id") or ""
+        return json.loads((out / "backport-report.json").read_text(encoding="utf-8")).get("title_id") or ""
     except (OSError, ValueError):
         return None
 
@@ -296,6 +295,11 @@ def previous_build_title(out: Path) -> str | None:
 def clone_file(src: Path, dst: Path) -> str:
     """Reflink if the filesystem supports it, else copy. Returns 'reflink' | 'copy'."""
     dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl                            # POSIX only; Windows always copies
+    except ImportError:
+        shutil.copy2(src, dst)
+        return "copy"
     try:
         with open(src, "rb") as s, open(dst, "wb") as d:
             fcntl.ioctl(d.fileno(), FICLONE, s.fileno())
@@ -393,7 +397,7 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
     src_of: dict[str, Path] = {}
     for dp, _, fns in os.walk(out):
         for f in fns:
-            rel = str((Path(dp) / f).relative_to(out))
+            rel = (Path(dp) / f).relative_to(out).as_posix()
             if rel not in _SIB_SKIP:
                 src_of[rel] = out / rel
     extras: list[str] = []
@@ -454,7 +458,7 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
         # ---- post-check: nothing but the recorded fields moved ----
         problems = []
         want_files = set(src_of)
-        have_files = {str((Path(dp) / f).relative_to(sd)) for dp, _, fns in os.walk(sd) for f in fns}
+        have_files = {(Path(dp) / f).relative_to(sd).as_posix() for dp, _, fns in os.walk(sd) for f in fns}
         if have_files != want_files:
             problems.append(f"file set differs: {sorted(have_files ^ want_files)[:5]}")
         verified = []
@@ -496,7 +500,7 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
         if parent_o and parent_o.is_dir():
             for dp, _, fns in os.walk(parent_o):
                 for f in fns:
-                    rel = str((Path(dp) / f).relative_to(parent_o))
+                    rel = (Path(dp) / f).relative_to(parent_o).as_posix()
                     clone_file(parent_o / rel, odir_sd / rel)
                     n += 1
         for rel in extras:
@@ -528,13 +532,13 @@ def make_sibling(game: Path, out: Path, rep: BuildReport, gs: GameScan, major: i
             edits.append(Edit(c["file"], "sdk", c["offset"], c["old"], c["new"], c["what"] + " (sibling)"))
         sib_edits.append({"file": c["file"], "what": c["what"], "old": c["old"], "new": c["new"]})
     import dataclasses
-    s_outputs = ledger.hash_files(sd, [str((Path(dp) / f).relative_to(sd)) for dp, _, fns in os.walk(sd) for f in fns])
+    s_outputs = ledger.hash_files(sd, [(Path(dp) / f).relative_to(sd).as_posix() for dp, _, fns in os.walk(sd) for f in fns])
     srep = dataclasses.replace(rep, target=major, out=str(sd), edits=edits, verified=verified, siblings=[],
                                outputs=s_outputs,
                                originals=sib_originals, sibling_of=str(out), sibling_edits=sib_edits,
                                target_str=sdk.target_str(major, minor), warnings=list(rep.warnings), ok=True)
-    (sd / "backport-report.json").write_text(srep.to_json())
-    (sd / "backport-report.txt").write_text(srep.to_text())
+    (sd / "backport-report.json").write_text(srep.to_json(), encoding="utf-8")
+    (sd / "backport-report.txt").write_text(srep.to_text(), encoding="utf-8")
     ledger.record(s_outputs, title_id=rep.title_id, out=str(sd), built=rep.started, tool=__version__,
                   target=srep.target_str, warn=log)
     log(f"sibling FW {sdk.target_str(major, minor)}: {len(changes)} SDK field edit(s), diff check passed")
@@ -802,7 +806,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     trial = None
     if opts.memfix:
         from . import memfix
-        kt = opts.klog_text or (Path(opts.klog).read_text(errors="replace") if opts.klog else None)
+        kt = opts.klog_text or (Path(opts.klog).read_text(errors="replace", encoding="utf-8") if opts.klog else None)
         log(f"memfix: analysing allocation sites for {', '.join(opts.memfix)}")
         try:
             rec = memfix.generate(game, opts.memfix, gs.title_id, kt)
@@ -811,7 +815,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         if opts.dry_run:
             import tempfile
             tp = Path(tempfile.mkdtemp(prefix="ps5bp-memfix-")) / "memfix-recipe.json"
-            tp.write_text(json.dumps(rec, indent=1))
+            tp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
             patches.append(tp)
         else:
             trial, tpath = memfix.new_trial(gs.title_id, rec, game, opts.target)
@@ -970,7 +974,7 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
         files = [Path(dp) / f for dp, dn, fn in os.walk(game, followlinks=True) for f in fn]
         for k, src in enumerate(files):
             prog("copy", k, len(files))
-            rel = str(src.relative_to(game))
+            rel = src.relative_to(game).as_posix()
             if rel in outputs or (rel == pj_rel and pj_new is not None) or rel in remove or rel in extra_files:
                 continue
             stats[clone_file(src, out / rel)] += 1
@@ -1046,10 +1050,10 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
     rep.ok = not problems
     if trial is not None:
         from . import memfix
-        (out / "memfix-recipe.json").write_text(json.dumps(rec, indent=1))
+        (out / "memfix-recipe.json").write_text(json.dumps(rec, indent=1), encoding="utf-8")
         memfix.update_trial(gs.title_id, trial, out=str(out), ok=not problems)
-    (out / "backport-report.json").write_text(rep.to_json())
-    (out / "backport-report.txt").write_text(rep.to_text())
+    (out / "backport-report.json").write_text(rep.to_json(), encoding="utf-8")
+    (out / "backport-report.txt").write_text(rep.to_text(), encoding="utf-8")
     if problems:
         raise BuildError("verification failed:\n  " + "\n  ".join(problems))
     if also:
@@ -1058,8 +1062,8 @@ def build(game: Path | str, opts: BuildOptions, db: EvidenceDB | None = None,
             sib = make_sibling(game, out, rep, gs, mj, mn, log)
             rep.siblings.append({"target": mj, "target_minor": mn, "target_str": sdk.target_str(mj, mn),
                                  "out": sib["out"], "edits": sib["edits"]})
-        (out / "backport-report.json").write_text(rep.to_json())      # now lists the siblings
-        (out / "backport-report.txt").write_text(rep.to_text())
+        (out / "backport-report.json").write_text(rep.to_json(), encoding="utf-8")      # now lists the siblings
+        (out / "backport-report.txt").write_text(rep.to_text(), encoding="utf-8")
     log(f"done: {len(rep.edits)} edit(s), {len(rep.fakelibs)} fakelib(s), {len(rep.verified)} binaries verified")
     return rep
 

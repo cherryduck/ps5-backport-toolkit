@@ -273,21 +273,21 @@ def new_trial(title: str, recipe: dict, game: Path, target: int) -> tuple[int, P
     p = d / f"{n}.json"
     p.write_text(json.dumps({"id": n, "title_id": title, "game": str(game), "target": target,
                              "time": time.strftime("%Y-%m-%d %H:%M:%S"), "choices": recipe["choices"],
-                             "out": None, "result": None, "recipe": recipe}, indent=1))
+                             "out": None, "result": None, "recipe": recipe}, indent=1), encoding="utf-8")
     return n, p
 
 
 def recipe_file(trial_path: Path) -> Path:
     """The trial's recipe as a standalone file (what the build applies)."""
-    t = json.loads(trial_path.read_text())
+    t = json.loads(trial_path.read_text(encoding="utf-8"))
     p = trial_path.with_suffix(".recipe.json")
-    p.write_text(json.dumps(t["recipe"], indent=1))
+    p.write_text(json.dumps(t["recipe"], indent=1), encoding="utf-8")
     return p
 
 
 def list_trials(title: str) -> list[dict]:
     d = trials_dir(title)
-    out = [json.loads(p.read_text()) for p in d.glob("*.json") if p.stem.isdigit()] if d.is_dir() else []
+    out = [json.loads(p.read_text(encoding="utf-8")) for p in d.glob("*.json") if p.stem.isdigit()] if d.is_dir() else []
     return sorted(out, key=lambda t: t["id"])
 
 
@@ -295,9 +295,9 @@ def update_trial(title: str, n: int, **kw) -> dict:
     p = trials_dir(title) / f"{n}.json"
     if not p.is_file():
         raise MemfixError(f"no trial {n} for {title}")
-    t = json.loads(p.read_text())
+    t = json.loads(p.read_text(encoding="utf-8"))
     t.update(kw)
-    p.write_text(json.dumps(t, indent=1))
+    p.write_text(json.dumps(t, indent=1), encoding="utf-8")
     return t
 
 
@@ -311,7 +311,7 @@ def record_result(game: Path, title: str, n: int, works: bool, klog_text: str | 
         d = user_recipes_dir()
         d.mkdir(parents=True, exist_ok=True)
         p = d / f"{r['name']}.json"
-        p.write_text(json.dumps(r, indent=1))
+        p.write_text(json.dumps(r, indent=1), encoding="utf-8")
         return [f"trial {n} works — saved as {p}", "the pssr-memory rule now offers it for this title"]
     msgs = [f"trial {n} marked as crashing"]
     if not klog_text:

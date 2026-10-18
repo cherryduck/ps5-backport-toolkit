@@ -46,7 +46,7 @@ def names() -> dict[str, str]:
     """NID -> symbol name, from data/nid_names.txt (one name per line), the verified names in stub_contracts.json, plus UNNAMED."""
     table = dict(UNNAMED)
     try:
-        text = resources.files("ps5bp").joinpath("data/nid_names.txt").read_text()
+        text = resources.files("ps5bp").joinpath("data/nid_names.txt").read_text(encoding="utf-8")
     except (FileNotFoundError, ModuleNotFoundError):
         text = ""
     for line in text.splitlines():
@@ -55,7 +55,7 @@ def names() -> dict[str, str]:
             table[nid(line)] = line
     try:                                   # contract names whose hash matches their NID are verified
         import json
-        data = json.loads(resources.files("ps5bp").joinpath("data/stub_contracts.json").read_text())
+        data = json.loads(resources.files("ps5bp").joinpath("data/stub_contracts.json").read_text(encoding="utf-8"))
         for c in data.get("contracts", []):
             if c.get("name_verified") and nid(c["name"]) == c["nid"]:
                 table.setdefault(c["nid"], c["name"])
