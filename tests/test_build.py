@@ -58,7 +58,7 @@ def test_overlay_build(game, db, tmp_path):
     out = tmp_path / "out"
     rep = build(game, BuildOptions(target=4, out=out), db, log=lambda m: None)
     assert rep.ok
-    files = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+    files = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
     assert files == ["backport-report.json", "backport-report.txt", "eboot.bin", "fakelib/libSceFoo.sprx",
                      "sce_module/libc.prx", "sce_sys/param.json"]          # old.prx (SDK 3) untouched
     for f in ("eboot.bin", "sce_module/libc.prx", "fakelib/libSceFoo.sprx"):
@@ -126,7 +126,7 @@ from pathlib import Path                                    # noqa: E402
 
 
 def _tree(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in Path(root).rglob("*")
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in Path(root).rglob("*")
             if p.is_file() and not p.name.startswith("backport-report")}
 
 
@@ -396,12 +396,14 @@ def test_undo_old_report_without_inputs(game, db, tmp_path):
 
 
 def test_case_insensitive_member_lookup(tmp_path):
-    from ps5bp.core.ledger import AmbiguousMember, resolve_member
+    from ps5bp.core.ledger import CASE_INSENSITIVE_FS, AmbiguousMember, resolve_member
     (tmp_path / "Sce_Module").mkdir()
     (tmp_path / "Sce_Module/LIBC.PRX").write_bytes(b"x")
     assert resolve_member(tmp_path, "sce_module/libc.prx") == "Sce_Module/LIBC.PRX"
     assert resolve_member(tmp_path, "sce_module/new.prx") == "Sce_Module/new.prx"
     assert resolve_member(tmp_path, "nothere/a/b") == "nothere/a/b"
+    if CASE_INSENSITIVE_FS:
+        return                                  # names differing only in case can't coexist here
     (tmp_path / "Sce_Module/libc.prx").write_bytes(b"y")
     assert resolve_member(tmp_path, "Sce_Module/libc.prx") == "Sce_Module/libc.prx"      # exact wins
     with pytest.raises(AmbiguousMember):
@@ -421,6 +423,9 @@ def test_undo_case_insensitive_game(game, db, tmp_path):
     assert {k: v for k, v in after.items() if k in before} == before
     assert not (game / "eboot.bin").exists() or (game / "EBOOT.BIN").exists()
     # ambiguity -> refused
+    from ps5bp.core.ledger import CASE_INSENSITIVE_FS
+    if CASE_INSENSITIVE_FS:
+        return                                  # names differing only in case can't coexist here
     import shutil
     shutil.rmtree(game / "sce_module", ignore_errors=True)
     (game / "SCE_MODULE/LIBC.PRX").write_bytes(b"z")

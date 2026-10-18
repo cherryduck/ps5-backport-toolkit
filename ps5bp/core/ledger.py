@@ -47,7 +47,7 @@ def load(warn: Callable[[str], None] = _warn_default) -> list[dict]:
     """The ledger's entries. A corrupt file is kept as applied.json.bak and replaced by an empty ledger."""
     p = ledger_path()
     try:
-        raw = p.read_text()
+        raw = p.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     except OSError as e:
@@ -75,7 +75,7 @@ def _save(entries: list[dict]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=p.parent)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"version": VERSION, "entries": entries}, f, indent=1)
             f.flush()
             os.fsync(f.fileno())
@@ -114,6 +114,9 @@ def known_outputs(inputs: dict[str, str], warn: Callable[[str], None] = _warn_de
 
 
 # ---- case-insensitive member lookup ----------------------------------------------------
+CASE_INSENSITIVE_FS = sys.platform in ("win32", "darwin")
+
+
 class AmbiguousMember(Exception):
     pass
 
@@ -124,14 +127,17 @@ def resolve_member(root: Path, rel: str) -> str:
     The exact path wins. Otherwise each component is matched case-insensitively against the
     directory listing; exactly one candidate is required (several -> AmbiguousMember). A
     component that matches nothing, and everything after it, is kept as given (the file may
-    legitimately not exist)."""
-    if (root / rel).exists():
+    legitimately not exist).
+
+    On a case-insensitive filesystem (Windows, macOS) `exists()` says yes for any spelling, so
+    every component is checked against the real directory listing instead."""
+    if not CASE_INSENSITIVE_FS and (root / rel).exists():
         return rel
     cur = root
     parts = Path(rel).parts
     out: list[str] = []
     for i, part in enumerate(parts):
-        if (cur / part).exists():
+        if not CASE_INSENSITIVE_FS and (cur / part).exists():
             out.append(part)
             cur = cur / part
             continue
@@ -139,12 +145,16 @@ def resolve_member(root: Path, rel: str) -> str:
             names = os.listdir(cur) if cur.is_dir() else []
         except OSError:
             names = []
+        if part in names:
+            out.append(part)
+            cur = cur / part
+            continue
         hits = [n for n in names if n.casefold() == part.casefold()]
         if len(hits) > 1:
             raise AmbiguousMember(f"{rel}: '{part}' matches {len(hits)} entries that differ only in case "
                                   f"({', '.join(sorted(hits))}) in {cur}")
         if not hits:
-            return str(Path(*out, *parts[i:])) if out or parts[i:] else rel
+            return Path(*out, *parts[i:]).as_posix() if out or parts[i:] else rel
         out.append(hits[0])
         cur = cur / hits[0]
-    return str(Path(*out))
+    return Path(*out).as_posix()

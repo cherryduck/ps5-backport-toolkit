@@ -97,7 +97,7 @@ def plan_undo(game: Path, reports: list[Path], force: bool = False) -> UndoPlan:
             up.notes.append("--force: " + msg)
 
     gone: set[str] = set()
-    reps = [json.loads((rp / "backport-report.json" if rp.is_dir() else rp).read_text()) for rp in reports]
+    reps = [json.loads((rp / "backport-report.json" if rp.is_dir() else rp).read_text(encoding="utf-8")) for rp in reports]
     for n, rep in enumerate(reps):
         if not rep.get("inputs") or not rep.get("outputs"):
             up.notes.append(f"report {n + 1} ({rep.get('out', '?')}) has no input/output hashes — "
@@ -106,7 +106,7 @@ def plan_undo(game: Path, reports: list[Path], force: bool = False) -> UndoPlan:
         touched: list[str] = []                       # game files this report rewrites (for the post-check)
         if odir is not None and odir.is_dir():
             # exact copies of the input: restore those files wholesale, delete the rest it added
-            have = {R(str(Path(dp, f).relative_to(odir))): str(Path(dp, f).relative_to(odir))
+            have = {R(Path(dp, f).relative_to(odir).as_posix()): Path(dp, f).relative_to(odir).as_posix()
                     for dp, _, fs in os.walk(odir) for f in fs}
             verify(rep, sorted(have), "outputs", "these game files are not the backported files this build wrote "
                    "(changed since it was applied, or another build is on top)")

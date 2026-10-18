@@ -3,7 +3,7 @@
 Game-specific: the patch sites differ per title/version, so this rule offers the
 built-in recipes in ps5bp/data/recipes whose title and byte signatures match.
 Also offers recipes confirmed with `ps5bp memfix --result N works`
-(~/.local/share/ps5bp/recipes/); the first applicable recipe per file wins (user recipes before built-ins).
+(<data folder>/recipes/, see evidence.home()); the first applicable recipe per file wins (user recipes before built-ins).
 Off by default (changes game code, not just imports); conflicts with pro-disable.
 """
 from __future__ import annotations

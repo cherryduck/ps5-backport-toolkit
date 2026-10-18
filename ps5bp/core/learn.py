@@ -303,7 +303,7 @@ def learn_report(original: Path, kit: Path, recipe: bool = False, out: Path = Pa
     out.mkdir(parents=True, exist_ok=True)
     for rec in recipes:
         f = out / f"{rec['name']}.json"
-        f.write_text(_json.dumps(rec, indent=1))
+        f.write_text(_json.dumps(rec, indent=1), encoding="utf-8")
         L.append(f"wrote {f}  ({len(rec['ops'])} edit(s)) — apply with: ps5bp build ... --patch {f}")
     if not recipes:
         L.append("no game-specific edits to learn")

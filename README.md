@@ -1,6 +1,6 @@
-# PS5 Backport Linux
+# PS5 Backport Toolkit
 
-*A Linux toolkit for backporting PS5 games. The commands are `ps5bp` (command line) and `ps5bp-gui` (app).*
+*A Windows and Linux toolkit for backporting PS5 games. The commands are `ps5bp` (command line) and `ps5bp-gui` (app).*
 
 **ps5bp turns a PS5 game dump into a *backport*: a version of the game that runs on a console
 with older firmware than the game was made for.** It has a graphical app (`ps5bp-gui`) and a
@@ -53,37 +53,66 @@ from a decrypted dump and copy the result onto the console your usual way.
 
 ## Install
 
-You need a Linux PC with git and Python 3.11 or newer. First get the code:
+ps5bp runs on **Windows 10/11** and **Linux** (x86-64).
+
+### Download (easiest)
+
+Get the file for your system from the
+[latest release](https://github.com/cherryduck/ps5-backport-toolkit/releases/latest):
+
+- **Windows:** `ps5bp-<version>-windows-x64.zip`. Unzip it anywhere and run `ps5bp-gui.exe`
+  (the app) or `ps5bp.exe` (command line, from a terminal in that folder). The files aren't
+  code-signed, so SmartScreen may warn the first time: *More info* → *Run anyway*.
+- **Linux:** `ps5bp-<version>-linux-x86_64.tar.gz` (needs glibc 2.35 or newer, i.e. any distro
+  from 2022 on). Extract it, then run `./ps5bp-gui` or `./ps5bp` from the folder.
+  `./install-desktop.sh` in the same folder adds "PS5 Backport Toolkit" to your app menu.
+
+### From source
+
+You need git and Python 3.11 or newer. First get the code:
 ```
-git clone https://github.com/cherryduck/ps5-backport-linux.git
-cd ps5-backport-linux
+git clone https://github.com/cherryduck/ps5-backport-toolkit.git
+cd ps5-backport-toolkit
 ```
 Then pick one:
 
 **Standalone app (nothing else to install afterwards):**
 ```
-scripts/build-bundle.sh                              # builds dist/ps5bp/ps5bp and dist/ps5bp/ps5bp-gui
-scripts/install-desktop.sh dist/ps5bp/ps5bp-gui      # adds "PS5 Backport Linux" to your app menu
+scripts/build-bundle.sh                              # Linux: builds dist/ps5bp/ps5bp and dist/ps5bp/ps5bp-gui
+scripts/install-desktop.sh dist/ps5bp/ps5bp-gui      # adds "PS5 Backport Toolkit" to your app menu
 ```
-After pulling new changes, run `scripts/build-bundle.sh` again, or the app menu keeps starting
-the old version.
+```
+scripts\build-bundle.ps1                             # Windows (PowerShell): dist\ps5bp\ps5bp.exe and ps5bp-gui.exe
+```
+After pulling new changes, build again, or you keep running the old version.
 
 **With pipx:**
 ```
-pipx install '.[gui]'                                           # puts ps5bp and ps5bp-gui on your PATH
-scripts/install-desktop.sh                           # optional app-menu entry
+pipx install '.[gui]'                                # puts ps5bp and ps5bp-gui on your PATH
+scripts/install-desktop.sh                           # Linux, optional app-menu entry
 ```
 
 **For development:** `python -m venv .venv && .venv/bin/pip install -e '.[gui,dev]'`
+(Windows: `.venv\Scripts\pip install -e .[gui,dev]`)
 
-ps5bp keeps its data (kits, history) in `~/.local/share/ps5bp/`. Set `PS5BP_HOME` to use
-another folder.
+### Where ps5bp keeps its data
+
+Kits, history and crash dumps live in:
+
+| System | Folder |
+|---|---|
+| Linux | `~/.local/share/ps5bp/` (or `$XDG_DATA_HOME/ps5bp/`) |
+| Windows | `%LOCALAPPDATA%\ps5bp\` |
+
+Set `PS5BP_HOME` to use another folder. The app's own settings (last game, console IP, …) are in
+`~/.config/ps5bp/ps5bp.conf` on Linux and `%APPDATA%\ps5bp\ps5bp.ini` on Windows.
 
 ---
 
 ## Your first backport (app)
 
-Start **PS5 Backporter** from the app menu (or run `ps5bp-gui`).
+Start **PS5 Backport Toolkit**: `ps5bp-gui.exe` on Windows; on Linux from the app menu or by
+running `ps5bp-gui`.
 
 1. **Add at least one kit** (first time only). Open the **Kits** tab → *Add kit folder…* or
    *Add kit zip…* and pick an existing backport (any game). Say which firmware it was made for
@@ -124,7 +153,7 @@ Other things in the app:
 
 ```
 # once: add kits (existing backports) to the library
-ps5bp kit add "FW4xx PPSA11386 backport.zip" --fw 4 --source DLPS
+ps5bp kit add "FW4xx PPSA11386 backport.zip" --fw 4 --source Deckerr97
 
 # look before you leap: what's needed, what's missing, which fixes apply (writes nothing)
 ps5bp analyze /games/PPSA12345 --target 4 --console-fw 11.60
@@ -138,6 +167,9 @@ ps5bp klog crash.txt --game /games/PPSA12345
 ```
 
 `ps5bp rules` lists all fix rules; `ps5bp <command> --help` shows every option.
+
+On Windows, run the same commands as `ps5bp.exe` from a terminal in the unzipped folder (or add
+the folder to `PATH`), with Windows paths, e.g. `ps5bp.exe analyze D:\games\PPSA12345 --target 4`.
 
 ---
 
@@ -332,7 +364,7 @@ Only a console boot tells you whether a fix works; ps5bp records your results, i
 | Mode | What you get |
 |---|---|
 | `overlay` (default) | Only changed files + `fakelib/`. Copy it over the game. |
-| `full` | A complete copy of the game with the changes (unchanged files are reflinked when possible, so it's fast and doesn't double disk use). |
+| `full` | A complete copy of the game with the changes (on Linux btrfs/XFS unchanged files are reflinked, so it's fast and doesn't double disk use; elsewhere they are copied). |
 | `inplace` | Edits the game folder directly, keeping `.orig` backups. |
 
 `--dry-run` shows what would happen without writing anything.
@@ -497,7 +529,7 @@ before this feature: `ps5bp kit reindex`, or `kit add --replace`.
 | Rule | Exact change and guards |
 |---|---|
 | `pro-disable` | Pro hardware query (`NH6xARDOVv8`) → both outputs 0 (base PS5); `sceKernelIsTrinityMode` → 0. The PLT entry becomes the stub; if the NID is proven absent on the target, the import is bound locally. Never recommended: the declared SDK says nothing about the console's own firmware, which normally has these functions. Conflicts with `pssr-memory`. |
-| `pssr-memory` | Keep Pro/PSSR; per-game recipes in `ps5bp/data/recipes/` shrink or split start-up allocations. The Wolverine 01.001.005 recipe reproduces the DLPS FW4 eboot byte for byte. Combines with `psml-overlay`. |
+| `pssr-memory` | Keep Pro/PSSR; per-game recipes in `ps5bp/data/recipes/` shrink or split start-up allocations. The Wolverine 01.001.005 recipe reproduces Deckerr97's FW4 eboot byte for byte. Combines with `psml-overlay`. |
 | `kit-stubs` | Every import some kit PLT-stubbed for this firmware gets the same stub, in every game binary; `--stubs-from KIT` limits sources. Pro NIDs are left to `pro-disable` / `pssr-memory` when on. |
 | `compat-stubs` | **GOT-seed** stubs from `ps5bp/data/stub_contracts.json` (details below). |
 | `set3-nonfatal` | Targets 6–9: `sceAudioOut2Set3DLatency` rejects mode>1 (0x80268001) and Wwise treats that as fatal. At every call, `test eax,eax; je X` → `jmp X`. All callers must have exactly that shape, else nothing is patched. |
@@ -556,7 +588,7 @@ Byte-edit rules must match exactly: a different value at the same site stays une
 a note naming the rule. Cave-placing rules are matched by structure, so the kit's choice of cave
 doesn't matter.
 
-For DLPS's ACE COMBAT 8 4.03 build nothing is left unexplained. With `kit-stubs`,
+For Deckerr97's ACE COMBAT 8 4.03 build nothing is left unexplained. With `kit-stubs`,
 `mapflex-flags`, `savedata-mount` and `wwise-71`, ps5bp reproduces all 58 game binaries,
 `param.json` and the fakelib set byte for byte. The comparison is on the ELF payload: their
 re-signer also zeroes e_shnum, and their unused libScePsml isn't shipped.
@@ -600,7 +632,18 @@ game paths case-insensitively when the exact path is missing; an ambiguous match
 ```
 .venv/bin/pytest                                     # synthetic binaries and logs; no game data needed
 PS5BP_FIXTURES=~/ps5bp-fixtures .venv/bin/pytest     # + tests against real backport folders
+.venv\Scripts\pytest                                 # Windows
 ```
+
+GitHub Actions runs the tests and builds both bundles on Ubuntu 22.04 and Windows for every pull
+request and push to `master`.
+
+## Making a release
+
+Bump `__version__` in `ps5bp/__init__.py` and merge to `master`. The workflow then tags `v<version>`
+and publishes a GitHub release with the Linux tarball, the Windows zip and `SHA256SUMS`. The
+release notes are the commit subjects since the previous release; put extra text for a version in
+`.github/release-notes/v<version>.md`. Merges that don't change the version don't release.
 
 No console binaries, game data, kits or logs are included, and none may be committed.
 
@@ -608,6 +651,6 @@ No console binaries, game data, kits or logs are included, and none may be commi
 
 Format knowledge is public and was re-derived independently: SELF/ELF layout, the
 PT_SCE_PROCPARAM SDK fields (idlesauce's SDK downgrade script) and fakelib sideloading (BestPig's
-BackPork). The Wolverine PSSR memory recipe encodes the technique of the Deckerr97 FW4 backport.
+BackPork). The Wolverine PSSR memory recipe encodes the technique of Deckerr97's FW4 backport.
 Several rules re-implement techniques observed in community FW4 backports. No code from any of
 these projects is used.
