@@ -1,6 +1,7 @@
 """Main window: game -> analyze -> choose rules -> build."""
 from __future__ import annotations
 
+import os
 from collections import deque
 from pathlib import Path
 
@@ -48,12 +49,20 @@ def fill(t: QTableWidget, rows: list[list], colors: dict[int, str] | None = None
             t.setItem(r, c, it)
 
 
+def settings_store() -> QSettings:
+    """Saved GUI state. Linux: ~/.config/ps5bp/ps5bp.conf (native). Windows: an INI file in
+    %APPDATA%\\ps5bp rather than the registry, so it is a plain file (and tests can redirect it)."""
+    if os.name == "nt":
+        return QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope, "ps5bp", "ps5bp")
+    return QSettings("ps5bp", "ps5bp")
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"PS5 Backport Toolkit {__version__}")
         self.resize(1100, 760)
-        self.settings = QSettings("ps5bp", "ps5bp")
+        self.settings = settings_store()
         self.plan = None
         self.worker = None                     # current AnalyzeWorker / BuildWorker
         self.kit_worker = None
