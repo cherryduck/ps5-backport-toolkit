@@ -66,7 +66,7 @@ class Recipe:
 
     @classmethod
     def load(cls, path: Path | str, text: str | None = None) -> "Recipe":
-        d = json.loads(text if text is not None else Path(path).read_text())
+        d = json.loads(text if text is not None else Path(path).read_text(encoding="utf-8"))
         for k in ("name", "file"):
             if k not in d:
                 raise RecipeError(f"{path}: missing '{k}'")
@@ -246,7 +246,7 @@ def builtin(rule: str | None = None) -> list[Recipe]:
     out = []
     for f in sorted(d.iterdir(), key=lambda p: p.name):
         if f.name.endswith(".json"):
-            r = Recipe.load(f"builtin:{f.name}", f.read_text())
+            r = Recipe.load(f"builtin:{f.name}", f.read_text(encoding="utf-8"))
             if rule is None or r.rule == rule:
                 out.append(r)
     return out

@@ -119,7 +119,7 @@ def test_learn_explains_rule_edits(tmp_path):
 
 
 def sha_tree(d: Path) -> dict:
-    return {str(p.relative_to(d)): hashlib.sha256(p.read_bytes()).hexdigest()
+    return {p.relative_to(d).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(d.rglob("*")) if p.is_file()}
 
 

@@ -110,7 +110,7 @@ def _flags(b: Binary, d: dynamic.Dynamic | None) -> list[str]:
 
 
 def scan_binary(path: Path, root: Path, role: str) -> BinaryInfo:
-    info = BinaryInfo(path=str(path.relative_to(root)), role=role, size=path.stat().st_size)
+    info = BinaryInfo(path=path.relative_to(root).as_posix(), role=role, size=path.stat().st_size)
     try:
         b = Binary.load(path)
     except EncryptedError as e:
@@ -197,7 +197,7 @@ def scan_game(root: Path | str, progress: Callable[[int, int, str], None] | None
     files = list(iter_binaries(root))
     for i, path in enumerate(files):
         rel = path.relative_to(root)
-        role = "fakelib" if rel.parts[0] == "fakelib" else ("eboot" if str(rel) == "eboot.bin" else "module")
+        role = "fakelib" if rel.parts[0] == "fakelib" else ("eboot" if rel.as_posix() == "eboot.bin" else "module")
         if progress:
             progress(i, len(files), str(rel))
         gs.binaries.append(scan_binary(path, root, role))

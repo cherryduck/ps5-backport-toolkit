@@ -55,7 +55,7 @@ class Contract:
 
 @lru_cache(maxsize=1)
 def load() -> dict[str, Contract]:
-    raw = json.loads(resources.files("ps5bp").joinpath("data/stub_contracts.json").read_text())
+    raw = json.loads(resources.files("ps5bp").joinpath("data/stub_contracts.json").read_text(encoding="utf-8"))
     out = {}
     for c in raw["contracts"]:
         stub = bytes.fromhex(c["stub"])
